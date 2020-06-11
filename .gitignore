@@ -1,0 +1,23 @@
+# Virtualenv
+/.venv/
+/venv/
+
+.idea/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+.ipynb_checkpoints/
+
+/images/res/*.jpg
+/eval_results/
+/results/
+/weights/
+/annotation_json/
+/model/__pycache__/
+
+
+yolov4.pt
+yolov4.h5
+
+
+
