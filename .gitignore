@@ -16,8 +16,9 @@ __pycache__/
 /model/__pycache__/
 
 
-yolov4.pt
-yolov4.h5
+*.pt
+*.pth
+*.h5
 
 
 
