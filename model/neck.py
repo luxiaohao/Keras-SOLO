@@ -28,7 +28,8 @@ def FPN(xs, out_channels, start_level, num_outs, add_extra_convs=False):
     # build top-down path
     used_backbone_levels = len(laterals)
     for i in range(used_backbone_levels - 1, 0, -1):
-        laterals[i - 1] += layers.UpSampling2D(2)(laterals[i])
+        x = layers.UpSampling2D(2)(laterals[i])
+        laterals[i - 1] = layers.add([laterals[i - 1], x])
 
     # build outputs
     # part 1: from original levels

@@ -21,9 +21,11 @@ from model.solo import SOLO
 num_classes = 80
 
 inputs = layers.Input(shape=(None, None, 3))
+inputs = layers.Input(shape=(416, 416, 3))
 outs = SOLO(inputs, num_classes, use_dcn=False)
 model = keras.models.Model(inputs=inputs, outputs=outs)
-model.summary()
+# model.summary()
+# keras.utils.vis_utils.plot_model(model, to_file='solo.png', show_shapes=True)
 
 
 
