@@ -15,16 +15,30 @@ from keras.engine.topology import Layer
 
 
 
+
+
+
+def conv2d_unit(x, filters, kernels, strides=1, padding='valid', use_bias=False, bn=1, act='relu'):
+    x = layers.Conv2D(filters, kernels,
+               padding=padding,
+               strides=strides,
+               use_bias=use_bias,
+               activation='linear',
+               kernel_initializer=keras.initializers.RandomNormal(mean=0.0, stddev=0.01))(x)
+    if bn:
+        x = layers.BatchNormalization()(x)
+    if act == 'leaky':
+        x = layers.advanced_activations.LeakyReLU(alpha=0.1)(x)
+    elif act == 'relu':
+        x = layers.advanced_activations.ReLU()(x)
+    return x
+
+
 def _3x3conv(x, filters2, use_dcn):
     if use_dcn:
         pass
     else:
-        x = layers.Conv2D(filters2, 3,
-                   padding='same',
-                   strides=1,
-                   use_bias=False,
-                   activation='linear',
-                   kernel_initializer=keras.initializers.RandomNormal(mean=0.0, stddev=0.01))(x)
+        x = conv2d_unit(x, filters2, 3, strides=1, padding='same', use_bias=False, bn=0, act=None)
     x = layers.BatchNormalization()(x)
     x = layers.advanced_activations.ReLU()(x)
     return x
@@ -32,33 +46,11 @@ def _3x3conv(x, filters2, use_dcn):
 def conv_block(input_tensor, filters, use_dcn=False, stride=2):
     filters1, filters2, filters3 = filters
 
-    x = layers.Conv2D(filters1, 1,
-               padding='valid',
-               strides=stride,
-               use_bias=False,
-               activation='linear',
-               kernel_initializer=keras.initializers.RandomNormal(mean=0.0, stddev=0.01))(input_tensor)
-    x = layers.BatchNormalization()(x)
-    x = layers.advanced_activations.ReLU()(x)
-
+    x = conv2d_unit(input_tensor, filters1, 1, strides=stride, padding='valid', use_bias=False, bn=1, act='relu')
     x = _3x3conv(x, filters2, use_dcn)
+    x = conv2d_unit(x, filters3, 1, strides=1, padding='valid', use_bias=False, bn=1, act=None)
 
-    x = layers.Conv2D(filters3, 1,
-               padding='valid',
-               strides=1,
-               use_bias=False,
-               activation='linear',
-               kernel_initializer=keras.initializers.RandomNormal(mean=0.0, stddev=0.01))(x)
-    x = layers.BatchNormalization()(x)
-
-
-    shortcut = layers.Conv2D(filters3, 1,
-               padding='valid',
-               strides=stride,
-               use_bias=False,
-               activation='linear',
-               kernel_initializer=keras.initializers.RandomNormal(mean=0.0, stddev=0.01))(input_tensor)
-    shortcut = layers.BatchNormalization()(shortcut)
+    shortcut = conv2d_unit(input_tensor, filters3, 1, strides=stride, padding='valid', use_bias=False, bn=1, act=None)
     x = layers.add([x, shortcut])
     x = layers.advanced_activations.ReLU()(x)
     return x
@@ -67,38 +59,16 @@ def conv_block(input_tensor, filters, use_dcn=False, stride=2):
 def identity_block(input_tensor, filters, use_dcn=False):
     filters1, filters2, filters3 = filters
 
-    x = layers.Conv2D(filters1, 1,
-               padding='valid',
-               strides=1,
-               use_bias=False,
-               activation='linear',
-               kernel_initializer=keras.initializers.RandomNormal(mean=0.0, stddev=0.01))(input_tensor)
-    x = layers.BatchNormalization()(x)
-    x = layers.advanced_activations.ReLU()(x)
-
+    x = conv2d_unit(input_tensor, filters1, 1, strides=1, padding='valid', use_bias=False, bn=1, act='relu')
     x = _3x3conv(x, filters2, use_dcn)
-
-    x = layers.Conv2D(filters3, 1,
-               padding='valid',
-               strides=1,
-               use_bias=False,
-               activation='linear',
-               kernel_initializer=keras.initializers.RandomNormal(mean=0.0, stddev=0.01))(x)
-    x = layers.BatchNormalization()(x)
+    x = conv2d_unit(x, filters3, 1, strides=1, padding='valid', use_bias=False, bn=1, act=None)
 
     x = layers.add([x, input_tensor])
     x = layers.advanced_activations.ReLU()(x)
     return x
 
 def stage1(x):
-    x = layers.Conv2D(64, 7,
-               padding='same',
-               strides=2,
-               use_bias=False,
-               activation='linear',
-               kernel_initializer=keras.initializers.RandomNormal(mean=0.0, stddev=0.01))(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.advanced_activations.ReLU()(x)
+    x = conv2d_unit(x, 64, 7, strides=2, padding='same', use_bias=False, bn=1, act='relu')
     x = layers.MaxPooling2D(pool_size=3, strides=2, padding='same')(x)
     return x
 
@@ -153,3 +123,7 @@ def Resnet101(inputs, use_dcn):
     s32 = identity_block(x, [512, 512, 2048], use_dcn=use_dcn)
 
     return [s4, s8, s16, s32]
+
+
+
+

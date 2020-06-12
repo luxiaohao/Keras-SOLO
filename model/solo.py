@@ -7,7 +7,6 @@
 #   Description : keras_solo
 #
 # ================================================================
-
 import keras
 import tensorflow as tf
 import keras.layers as layers
@@ -15,15 +14,15 @@ from keras import backend as K
 from keras.engine.topology import Layer
 
 from model.resnet import Resnet50
-from model.solo import SOLO
+from model.neck import FPN
+from model.head import DecoupledSOLOHead
 
 
-num_classes = 80
-
-inputs = layers.Input(shape=(None, None, 3))
-outs = SOLO(inputs, num_classes, use_dcn=False)
-model = keras.models.Model(inputs=inputs, outputs=outs)
-model.summary()
+def SOLO(x, num_classes, use_dcn, out_channels=256, start_level=0, num_outs=5):
+    x = Resnet50(x, use_dcn=use_dcn)
+    x = FPN(x, out_channels, start_level, num_outs, add_extra_convs=False)
+    outs = DecoupledSOLOHead(x)
+    return x
 
 
 

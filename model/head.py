@@ -7,23 +7,19 @@
 #   Description : keras_solo
 #
 # ================================================================
-
 import keras
 import tensorflow as tf
 import keras.layers as layers
 from keras import backend as K
 from keras.engine.topology import Layer
 
-from model.resnet import Resnet50
-from model.solo import SOLO
+from model.resnet import conv2d_unit
 
 
-num_classes = 80
+def DecoupledSOLOHead(xs, out_channels, start_level, num_outs, add_extra_convs=False):
+    return 1
 
-inputs = layers.Input(shape=(None, None, 3))
-outs = SOLO(inputs, num_classes, use_dcn=False)
-model = keras.models.Model(inputs=inputs, outputs=outs)
-model.summary()
+
 
 
 
