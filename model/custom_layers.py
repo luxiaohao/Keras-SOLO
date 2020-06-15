@@ -91,6 +91,7 @@ class GroupNormalization(Layer):
         variance = K.mean(t, axis=1, keepdims=True)
         std = K.sqrt(variance + self.epsilon)
         outputs = (x_reshape - mean) / std
+        outputs = K.reshape(outputs, (N, h*w, c))
         outputs = outputs*self.gamma + self.beta
         outputs = K.reshape(outputs, (N, h, w, c))
         return outputs
