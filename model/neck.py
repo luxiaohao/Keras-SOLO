@@ -12,12 +12,13 @@ from model.custom_layers import conv2d_unit
 
 
 def FPN(xs, out_channels, start_level, num_outs, add_extra_convs=False):
+    # FPN部分有8个卷积层
     num_ins = len(xs)
 
     # build laterals
     laterals = []
     for i in range(num_ins):
-        x = conv2d_unit(xs[i + start_level], out_channels, 1, strides=1, padding='valid', use_bias=False, bn=0, act=None)
+        x = conv2d_unit(xs[i + start_level], out_channels, 1, strides=1, padding='valid', use_bias=True, bn=0, act=None)
         laterals.append(x)
 
     # build top-down path
@@ -30,7 +31,7 @@ def FPN(xs, out_channels, start_level, num_outs, add_extra_convs=False):
     # part 1: from original levels
     outs = []
     for i in range(used_backbone_levels):
-        x = conv2d_unit(laterals[i], out_channels, 3, strides=1, padding='same', use_bias=False, bn=0, act=None)
+        x = conv2d_unit(laterals[i], out_channels, 3, strides=1, padding='same', use_bias=True, bn=0, act=None)
         outs.append(x)
     # part 2: add extra levels
     if num_outs > len(outs):

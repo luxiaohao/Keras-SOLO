@@ -18,10 +18,11 @@ from model.neck import FPN
 from model.head import DecoupledSOLOHead
 
 
-def SOLO(x, num_classes, use_dcn, out_channels=256, start_level=0, num_outs=5):
+def SOLO(x, use_dcn=False, eval=False, out_channels=256, start_level=0, num_outs=5):
     x = Resnet50(x, use_dcn=use_dcn)
     x = FPN(x, out_channels, start_level, num_outs, add_extra_convs=False)
-    x = DecoupledSOLOHead(x)
+    decoupledSOLOHead = DecoupledSOLOHead()
+    x = decoupledSOLOHead(x, eval)
     return x
 
 

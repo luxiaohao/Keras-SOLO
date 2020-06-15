@@ -8,6 +8,7 @@
 #
 # ================================================================
 
+import numpy as np
 import keras
 import tensorflow as tf
 import keras.layers as layers
@@ -18,14 +19,17 @@ from model.resnet import Resnet50
 from model.solo import SOLO
 
 
-num_classes = 80
-
-inputs = layers.Input(shape=(None, None, 3))
+# inputs = layers.Input(shape=(None, None, 3))
 inputs = layers.Input(shape=(416, 416, 3))
-outs = SOLO(inputs, num_classes, use_dcn=False)
+outs = SOLO(inputs, use_dcn=False)
 model = keras.models.Model(inputs=inputs, outputs=outs)
-# model.summary()
-# keras.utils.vis_utils.plot_model(model, to_file='solo.png', show_shapes=True)
+model.summary()
+keras.utils.vis_utils.plot_model(model, to_file='solo.png', show_shapes=True)
+
+# aa = np.zeros((8, 416, 416, 3), np.float32)
+# xxx = model.predict(aa)
+
+print()
 
 
 
