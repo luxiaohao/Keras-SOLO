@@ -7,13 +7,8 @@
 #   Description : keras_solo
 #
 # ================================================================
-import keras
-import tensorflow as tf
 import keras.layers as layers
-from keras import backend as K
-from keras.engine.topology import Layer
-
-from model.resnet import conv2d_unit
+from model.custom_layers import conv2d_unit
 
 
 def FPN(xs, out_channels, start_level, num_outs, add_extra_convs=False):

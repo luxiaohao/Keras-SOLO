@@ -7,31 +7,9 @@
 #   Description : keras_solo
 #
 # ================================================================
-import keras
-import tensorflow as tf
 import keras.layers as layers
-from keras import backend as K
-from keras.engine.topology import Layer
+from model.custom_layers import conv2d_unit
 
-
-
-
-
-
-def conv2d_unit(x, filters, kernels, strides=1, padding='valid', use_bias=False, bn=1, act='relu'):
-    x = layers.Conv2D(filters, kernels,
-               padding=padding,
-               strides=strides,
-               use_bias=use_bias,
-               activation='linear',
-               kernel_initializer=keras.initializers.RandomNormal(mean=0.0, stddev=0.01))(x)
-    if bn:
-        x = layers.BatchNormalization()(x)
-    if act == 'leaky':
-        x = layers.advanced_activations.LeakyReLU(alpha=0.1)(x)
-    elif act == 'relu':
-        x = layers.advanced_activations.ReLU()(x)
-    return x
 
 
 def _3x3conv(x, filters2, use_dcn):
