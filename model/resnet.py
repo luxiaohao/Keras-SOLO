@@ -46,6 +46,11 @@ def identity_block(input_tensor, filters, use_dcn=False):
     return x
 
 def stage1(x):
+    # x = layers.ZeroPadding2D(padding=((3, 3), (3, 3)))(x)
+    # x = conv2d_unit(x, 64, 7, strides=2, padding='valid', use_bias=False, bn=1, act='relu')
+    # x = layers.ZeroPadding2D(padding=((1, 0), (1, 0)))(x)
+    # x = layers.MaxPooling2D(pool_size=3, strides=2, padding='valid')(x)
+
     x = conv2d_unit(x, 64, 7, strides=2, padding='same', use_bias=False, bn=1, act='relu')
     x = layers.MaxPooling2D(pool_size=3, strides=2, padding='same')(x)
     return x

@@ -21,7 +21,9 @@ from model.solo import SOLO
 
 # inputs = layers.Input(shape=(None, None, 3))
 inputs = layers.Input(shape=(416, 416, 3))
-outs = SOLO(inputs, use_dcn=False)
+
+eval=True
+outs = SOLO(inputs, use_dcn=False, eval=eval)
 model = keras.models.Model(inputs=inputs, outputs=outs)
 model.summary()
 keras.utils.vis_utils.plot_model(model, to_file='solo.png', show_shapes=True)

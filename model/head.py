@@ -9,6 +9,7 @@
 # ================================================================
 import tensorflow as tf
 import keras
+import keras.backend as K
 import keras.layers as layers
 from model.custom_layers import Resize, GroupNormalization
 
@@ -41,7 +42,11 @@ def concat_coord(x):
 
     return [ins_feat_x, ins_feat_y]
 
-
+def points_nms(heat, kernel=2):
+    # kernel must be 2
+    hmax = K.pool2d(heat, (kernel, kernel), padding='same', pool_mode='max')
+    keep = K.cast(K.equal(hmax, heat), K.floatx())
+    return heat * keep
 
 class DecoupledSOLOHead(object):
     def __init__(self,
@@ -161,9 +166,8 @@ class DecoupledSOLOHead(object):
                 # 若输入图片大小为416x416，那么new_feats里图片大小应该为[52, 52, 26, 13, 13]，因为strides=[8, 8, 16, 32, 32]。
                 # 那么此处的5个ins_pred_x大小应该为[104, 104, 104, 104, 104]；
                 # 那么此处的5个ins_pred_y大小应该为[104, 104, 104, 104, 104]。即stride=4。训练时不会执行这里。
-
                 cate_pred = layers.Activation('sigmoid')(cate_pred)
-                # cate_pred = points_nms(cate_pred.sigmoid(), kernel=2).permute(0, 2, 3, 1)
+                cate_pred = layers.Lambda(points_nms)(cate_pred)
             ins_pred_x_list.append(ins_pred_x)
             ins_pred_y_list.append(ins_pred_y)
             cate_pred_list.append(cate_pred)
