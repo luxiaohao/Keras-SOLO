@@ -18,6 +18,20 @@ from model.neck import FPN
 from model.head import DecoupledSOLOHead
 
 
+
+
+class SOLO(object):
+    def __init__(self, backbone, neck, head):
+        super(SOLO, self).__init__()
+        self.backbone = backbone
+        self.neck = neck
+        self.head = head
+
+    def __call__(self, x, eval):
+        x = Resnet50(x, use_dcn=use_dcn)
+        x = FPN(x, out_channels, start_level, num_outs, add_extra_convs=False)
+        x = self.head(x, eval)
+
 def SOLO(x, use_dcn=False, eval=False, out_channels=256, start_level=0, num_outs=5):
     x = Resnet50(x, use_dcn=use_dcn)
     x = FPN(x, out_channels, start_level, num_outs, add_extra_convs=False)

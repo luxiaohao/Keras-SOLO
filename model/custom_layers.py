@@ -14,20 +14,46 @@ from keras import backend as K
 from keras.engine.topology import Layer
 
 
-def conv2d_unit(x, filters, kernels, strides=1, padding='valid', use_bias=False, bn=1, act='relu'):
-    x = layers.Conv2D(filters, kernels,
-               padding=padding,
-               strides=strides,
-               use_bias=use_bias,
-               activation='linear',
-               kernel_initializer=keras.initializers.RandomNormal(mean=0.0, stddev=0.01))(x)
-    if bn:
-        x = layers.BatchNormalization()(x)
-    if act == 'leaky':
-        x = layers.advanced_activations.LeakyReLU(alpha=0.1)(x)
-    elif act == 'relu':
-        x = layers.advanced_activations.ReLU()(x)
-    return x
+
+class Conv2dUnit(object):
+    def __init__(self, filters, kernels, strides=1, padding='valid', use_bias=False, bn=1, act='relu'):
+        super(Conv2dUnit, self).__init__()
+        self.conv = layers.Conv2D(filters, kernels,
+                   padding=padding,
+                   strides=strides,
+                   use_bias=use_bias,
+                   activation='linear',
+                   kernel_initializer=keras.initializers.RandomNormal(mean=0.0, stddev=0.01))
+        if bn:
+            self.bn = layers.BatchNormalization()
+        if act == 'leaky':
+            self.act = layers.advanced_activations.LeakyReLU(alpha=0.1)
+        elif act == 'relu':
+            self.act = layers.advanced_activations.ReLU()
+
+    def __call__(self, x):
+        x = self.conv(x)
+        if self.bn:
+            x = self.bn(x)
+        if self.act:
+            x = self.act(x)
+        return x
+
+class Conv3x3(object):
+    def __init__(self, filters2, use_dcn):
+        super(Conv3x3, self).__init__()
+        if use_dcn:
+            self.conv2d_unit = None
+        else:
+            self.conv2d_unit = Conv2dUnit(filters2, 3, strides=1, padding='same', use_bias=False, bn=0, act=None)
+        self.bn = layers.BatchNormalization()
+        self.act = layers.advanced_activations.ReLU()
+
+    def __call__(self, x):
+        x = self.conv2d_unit(x)
+        x = self.bn(x)
+        x = self.act(x)
+        return x
 
 class InstanceNormalization(Layer):
     """InstanceNormalization，输出图片的格式是(N, h, w, c)

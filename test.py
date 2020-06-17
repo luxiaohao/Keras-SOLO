@@ -25,6 +25,16 @@ inputs = layers.Input(shape=(416, 416, 3))
 eval=True
 outs = SOLO(inputs, use_dcn=False, eval=eval)
 model = keras.models.Model(inputs=inputs, outputs=outs)
+
+
+x = Resnet50(x, use_dcn=use_dcn)
+x = FPN(x, out_channels, start_level, num_outs, add_extra_convs=False)
+decoupledSOLOHead = DecoupledSOLOHead()
+x = decoupledSOLOHead(x, eval)
+
+
+
+
 model.summary()
 keras.utils.vis_utils.plot_model(model, to_file='solo.png', show_shapes=True)
 

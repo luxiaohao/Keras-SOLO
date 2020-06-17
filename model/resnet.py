@@ -8,105 +8,107 @@
 #
 # ================================================================
 import keras.layers as layers
-from model.custom_layers import conv2d_unit
+from model.custom_layers import Conv2dUnit, Conv3x3
 
 
+class ConvBlock(object):
+    def __init__(self, filters, use_dcn=False, stride=2):
+        super(ConvBlock, self).__init__()
+        filters1, filters2, filters3 = filters
 
-def _3x3conv(x, filters2, use_dcn):
-    if use_dcn:
-        pass
-    else:
-        x = conv2d_unit(x, filters2, 3, strides=1, padding='same', use_bias=False, bn=0, act=None)
-    x = layers.BatchNormalization()(x)
-    x = layers.advanced_activations.ReLU()(x)
-    return x
+        self.conv1 = Conv2dUnit(filters1, 1, strides=stride, padding='valid', use_bias=False, bn=1, act='relu')
+        self.conv2 = Conv3x3(filters2, use_dcn)
+        self.conv3 = Conv2dUnit(filters3, 1, strides=1, padding='valid', use_bias=False, bn=1, act=None)
 
-def conv_block(input_tensor, filters, use_dcn=False, stride=2):
-    filters1, filters2, filters3 = filters
+        self.conv4 = Conv2dUnit(filters3, 1, strides=stride, padding='valid', use_bias=False, bn=1, act=None)
+        self.act = layers.advanced_activations.ReLU()
 
-    x = conv2d_unit(input_tensor, filters1, 1, strides=stride, padding='valid', use_bias=False, bn=1, act='relu')
-    x = _3x3conv(x, filters2, use_dcn)
-    x = conv2d_unit(x, filters3, 1, strides=1, padding='valid', use_bias=False, bn=1, act=None)
-
-    shortcut = conv2d_unit(input_tensor, filters3, 1, strides=stride, padding='valid', use_bias=False, bn=1, act=None)
-    x = layers.add([x, shortcut])
-    x = layers.advanced_activations.ReLU()(x)
-    return x
-
-
-def identity_block(input_tensor, filters, use_dcn=False):
-    filters1, filters2, filters3 = filters
-
-    x = conv2d_unit(input_tensor, filters1, 1, strides=1, padding='valid', use_bias=False, bn=1, act='relu')
-    x = _3x3conv(x, filters2, use_dcn)
-    x = conv2d_unit(x, filters3, 1, strides=1, padding='valid', use_bias=False, bn=1, act=None)
-
-    x = layers.add([x, input_tensor])
-    x = layers.advanced_activations.ReLU()(x)
-    return x
-
-def stage1(x):
-    # x = layers.ZeroPadding2D(padding=((3, 3), (3, 3)))(x)
-    # x = conv2d_unit(x, 64, 7, strides=2, padding='valid', use_bias=False, bn=1, act='relu')
-    # x = layers.ZeroPadding2D(padding=((1, 0), (1, 0)))(x)
-    # x = layers.MaxPooling2D(pool_size=3, strides=2, padding='valid')(x)
-
-    x = conv2d_unit(x, 64, 7, strides=2, padding='same', use_bias=False, bn=1, act='relu')
-    x = layers.MaxPooling2D(pool_size=3, strides=2, padding='same')(x)
-    return x
+    def __call__(self, input_tensor):
+        x = self.conv1(input_tensor)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        shortcut = self.conv4(input_tensor)
+        x = layers.add([x, shortcut])
+        x = self.act(x)
+        return x
 
 
-def Resnet50(inputs, use_dcn):
-    # stage1
-    x = stage1(inputs)
-    # stage2
-    x = conv_block(x, [64, 64, 256], stride=1)
-    x = identity_block(x, [64, 64, 256])
-    s4 = identity_block(x, [64, 64, 256])
-    # stage3
-    x = conv_block(s4, [128, 128, 512], use_dcn=use_dcn)
-    x = identity_block(x, [128, 128, 512], use_dcn=use_dcn)
-    x = identity_block(x, [128, 128, 512], use_dcn=use_dcn)
-    s8 = identity_block(x, [128, 128, 512], use_dcn=use_dcn)
-    # stage4
-    x = conv_block(s8, [256, 256, 1024], use_dcn=use_dcn)
-    x = identity_block(x, [256, 256, 1024], use_dcn=use_dcn)
-    x = identity_block(x, [256, 256, 1024], use_dcn=use_dcn)
-    x = identity_block(x, [256, 256, 1024], use_dcn=use_dcn)
-    x = identity_block(x, [256, 256, 1024], use_dcn=use_dcn)
-    s16 = identity_block(x, [256, 256, 1024], use_dcn=use_dcn)
-    # stage5
-    x = conv_block(s16, [512, 512, 2048], use_dcn=use_dcn)
-    x = identity_block(x, [512, 512, 2048], use_dcn=use_dcn)
-    s32 = identity_block(x, [512, 512, 2048], use_dcn=use_dcn)
+class IdentityBlock(object):
+    def __init__(self, filters, use_dcn=False):
+        super(IdentityBlock, self).__init__()
+        filters1, filters2, filters3 = filters
 
-    return [s4, s8, s16, s32]
+        self.conv1 = Conv2dUnit(filters1, 1, strides=1, padding='valid', use_bias=False, bn=1, act='relu')
+        self.conv2 = Conv3x3(filters2, use_dcn)
+        self.conv3 = Conv2dUnit(filters3, 1, strides=1, padding='valid', use_bias=False, bn=1, act=None)
+
+        self.act = layers.advanced_activations.ReLU()
+
+    def __call__(self, input_tensor):
+        x = self.conv1(input_tensor)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = layers.add([x, input_tensor])
+        x = self.act(x)
+        return x
+
+class Resnet(object):
+    def __init__(self, depth, use_dcn=False):
+        super(Resnet, self).__init__()
+        assert depth in [50, 101]
+        self.conv1 = Conv2dUnit(64, 7, strides=2, padding='same', use_bias=False, bn=1, act='relu')
+        self.maxpool = layers.MaxPooling2D(pool_size=3, strides=2, padding='same')
+
+        # stage2
+        self.stage2_0 = ConvBlock([64, 64, 256], stride=1)
+        self.stage2_1 = IdentityBlock([64, 64, 256])
+        self.stage2_2 = IdentityBlock([64, 64, 256])
+
+        # stage3
+        self.stage3_0 = ConvBlock([128, 128, 512], use_dcn=use_dcn)
+        self.stage3_1 = IdentityBlock([128, 128, 512], use_dcn=use_dcn)
+        self.stage3_2 = IdentityBlock([128, 128, 512], use_dcn=use_dcn)
+        self.stage3_3 = IdentityBlock([128, 128, 512], use_dcn=use_dcn)
+
+        # stage4
+        self.stage4_0 = ConvBlock([256, 256, 1024], use_dcn=use_dcn)
+        k = 21
+        if depth == 50:
+            k = 4
+        self.stage4_layers = []
+        for i in range(k):
+            ly = IdentityBlock([256, 256, 1024], use_dcn=use_dcn)
+            self.stage4_layers.append(ly)
+        self.stage4_last_layer = IdentityBlock([256, 256, 1024], use_dcn=use_dcn)
+
+        # stage5
+        self.stage5_0 = ConvBlock([512, 512, 2048], use_dcn=use_dcn)
+        self.stage5_1 = IdentityBlock([512, 512, 2048], use_dcn=use_dcn)
+        self.stage5_2 = IdentityBlock([512, 512, 2048], use_dcn=use_dcn)
 
 
-def Resnet101(inputs, use_dcn):
-    # stage1
-    x = stage1(inputs)
-    # stage2
-    x = conv_block(x, [64, 64, 256], stride=1)
-    x = identity_block(x, [64, 64, 256])
-    s4 = identity_block(x, [64, 64, 256])
-    # stage3
-    x = conv_block(s4, [128, 128, 512], use_dcn=use_dcn)
-    x = identity_block(x, [128, 128, 512], use_dcn=use_dcn)
-    x = identity_block(x, [128, 128, 512], use_dcn=use_dcn)
-    s8 = identity_block(x, [128, 128, 512], use_dcn=use_dcn)
-    # stage4
-    x = conv_block(s8, [256, 256, 1024], use_dcn=use_dcn)
-    for i in range(1, 22):
-        x = identity_block(x, [256, 256, 1024], use_dcn=use_dcn)
-    s16 = identity_block(x, [256, 256, 1024], use_dcn=use_dcn)
-    # stage5
-    x = conv_block(s16, [512, 512, 2048], use_dcn=use_dcn)
-    x = identity_block(x, [512, 512, 2048], use_dcn=use_dcn)
-    s32 = identity_block(x, [512, 512, 2048], use_dcn=use_dcn)
+    def __call__(self, input_tensor):
+        x = self.conv1(input_tensor)
+        x = self.maxpool(x)
 
-    return [s4, s8, s16, s32]
-
-
+        # stage2
+        x = self.stage2_0(x)
+        x = self.stage2_1(x)
+        s4 = self.stage2_2(x)
+        # stage3
+        x = self.stage3_0(s4)
+        x = self.stage3_1(x)
+        x = self.stage3_2(x)
+        s8 = self.stage3_3(x)
+        # stage4
+        x = self.stage4_0(s8)
+        for ly in self.stage4_layers:
+            x = ly(x)
+        s16 = self.stage4_last_layer(x)
+        # stage5
+        x = self.stage5_0(s16)
+        x = self.stage5_1(x)
+        s32 = self.stage5_2(x)
+        return [s4, s8, s16, s32]
 
 
