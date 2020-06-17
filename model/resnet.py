@@ -59,8 +59,7 @@ class Resnet(object):
     def __init__(self, depth, use_dcn=False):
         super(Resnet, self).__init__()
         assert depth in [50, 101]
-        self.pad1 = layers.ZeroPadding2D(padding=(3, 3))
-        self.conv1 = Conv2dUnit(64, 7, strides=2, padding='valid', use_bias=False, bn=1, act='relu')
+        self.conv1 = Conv2dUnit(64, 7, strides=2, padding='same', use_bias=False, bn=1, act='relu')
         self.maxpool = layers.MaxPooling2D(pool_size=3, strides=2, padding='same')
 
         # stage2
@@ -92,8 +91,7 @@ class Resnet(object):
 
 
     def __call__(self, input_tensor):
-        x = self.pad1(input_tensor)
-        x = self.conv1(x)
+        x = self.conv1(input_tensor)
         x = self.maxpool(x)
 
         # stage2

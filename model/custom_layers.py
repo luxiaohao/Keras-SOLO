@@ -47,18 +47,11 @@ class Conv3x3(object):
         if use_dcn:
             self.conv2d_unit = None
         else:
-            self.pad1 = None
-            if strides == 2:
-                self.pad1 = layers.ZeroPadding2D(padding=((1, 0), (1, 0)))
-                self.conv2d_unit = Conv2dUnit(filters2, 3, strides=strides, padding='valid', use_bias=False, bn=0, act=None)
-            else:
-                self.conv2d_unit = Conv2dUnit(filters2, 3, strides=strides, padding='same', use_bias=False, bn=0, act=None)
+            self.conv2d_unit = Conv2dUnit(filters2, 3, strides=strides, padding='same', use_bias=False, bn=0, act=None)
         self.bn = layers.BatchNormalization()
         self.act = layers.advanced_activations.ReLU()
 
     def __call__(self, x):
-        if self.pad1:
-            x = self.pad1(x)
         x = self.conv2d_unit(x)
         x = self.bn(x)
         x = self.act(x)
