@@ -289,13 +289,17 @@ if __name__ == '__main__':
     normalizeBox = NormalizeBox()               # 将物体的左上角坐标、右下角坐标中的横坐标/图片宽、纵坐标/图片高 以归一化坐标。
     padBox = PadBox(cfg.num_max_boxes)          # 如果gt_bboxes的数量少于num_max_boxes，那么填充坐标是0的bboxes以凑够num_max_boxes。
     bboxXYXY2XYWH = BboxXYXY2XYWH()             # sample['gt_bbox']被改写为cx_cy_w_h格式。
+
     # batch_transforms
-    # randomShape = RandomShape()                 # 多尺度训练。随机选一个尺度。也随机选一种插值方式。
-    # normalizeImage = NormalizeImage(is_scale=True, is_channel_first=False)  # 图片归一化。直接除以255。
-    # gt2YoloTarget = Gt2YoloTarget(cfg.anchors,
-    #                               cfg.anchor_masks,
-    #                               cfg.downsample_ratios,
-    #                               num_classes)             # 填写target0、target1、target2张量。
+    # 6个分辨率(w, h)，随机选一个分辨率(w, h)训练。也随机选一种插值方式。原版SOLO中，因为设定了size_divisor=32，
+    # 所以被填充黑边的宽（或者高）会填充最少的黑边使得被32整除。所以一个batch最后所有的图片的大小有很大概率是不同的，
+    # 这里为了使得一批图片能被一个四维张量表示，所以按照size_divisor=None处理，即统一填充到被选中的分辨率(w, h)
+    randomShape = RandomShape()
+    normalizeImage = NormalizeImage(is_scale=False, is_channel_first=False)  # 图片归一化。
+    gt2SoloTarget = Gt2SoloTarget(cfg.anchors,
+                                  cfg.anchor_masks,
+                                  cfg.downsample_ratios,
+                                  num_classes)             # 填写target0、target1、target2张量。
 
     # 保存模型的目录
     if not os.path.exists('./weights'): os.mkdir('./weights')
@@ -339,21 +343,22 @@ if __name__ == '__main__':
             # debug  看数据增强后的图片。由于有随机裁剪，所以有的物体掩码不完整。
             # if os.path.exists('temp/'): shutil.rmtree('temp/')
             # os.mkdir('temp/')
-            # for r, sample in enumerate(samples):
-            #     img = sample['image']
-            #     gt_score = sample['gt_score']
-            #     gt_mask = sample['gt_mask']
-            #     aa = gt_mask.transpose(2, 0, 1)
-            #     cv2.imwrite('temp/%d.jpg'%r, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-            #     for rr, sc in enumerate(gt_score):
-            #         if sc > 0:
-            #             m = gt_mask[:, :, rr]
-            #             cv2.imwrite('temp/%d_%d.jpg'%(r, rr), m*255)
+            for r, sample in enumerate(samples):
+                img = sample['image']
+                gt_score = sample['gt_score']
+                gt_mask = sample['gt_mask']
+                aa = gt_mask.transpose(2, 0, 1)
+                cv2.imwrite('temp/%d.jpg'%r, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+                for rr, sc in enumerate(gt_score):
+                    if sc > 0:
+                        m = gt_mask[:, :, rr]
+                        cv2.imwrite('temp/%d_%d.jpg'%(r, rr), m*255)
+            print()
 
             # batch_transforms
             samples = randomShape(samples, context)
             samples = normalizeImage(samples, context)
-            batch_image, batch_label, batch_gt_bbox = gt2YoloTarget(samples, context)
+            batch_image, batch_label, batch_gt_bbox = gt2SoloTarget(samples, context)
 
             batch_xs = [batch_image, batch_label[2], batch_label[1], batch_label[0], batch_gt_bbox]
             y_true = [np.zeros(batch_size), np.zeros(batch_size), np.zeros(batch_size)]

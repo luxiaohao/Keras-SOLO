@@ -562,20 +562,21 @@ class BboxXYXY2XYWH(BaseOperator):
 
 class RandomShape(BaseOperator):
     """
-    Randomly reshape a batch. If random_inter is True, also randomly
-    select one an interpolation algorithm [cv2.INTER_NEAREST, cv2.INTER_LINEAR,
-    cv2.INTER_AREA, cv2.INTER_CUBIC, cv2.INTER_LANCZOS4]. If random_inter is
-    False, use cv2.INTER_NEAREST.
+    6个分辨率(w, h)，随机选一个分辨率(w, h)训练。也随机选一种插值方式。原版SOLO中，因为设定了size_divisor=32，
+    所以被填充黑边的宽（或者高）会填充最少的黑边使得被32整除。所以一个batch最后所有的图片的大小有很大概率是不同的，
+    这里为了使得一批图片能被一个四维张量表示，所以按照size_divisor=None处理，即统一填充到被选中的分辨率(w, h)
 
     Args:
-        sizes (list): list of int, random choose a size from these
+        sizes (list): 最大分辨率(w, h)
         random_inter (bool): whether to randomly interpolation, defalut true.
     """
 
-    def __init__(self, sizes=[320, 352, 384, 416, 448, 480, 512, 544, 576, 608], random_inter=True):
+    def __init__(self, sizes=[(1333, 800), (1333, 768), (1333, 736), (1333, 704), (1333, 672), (1333, 640)],
+                 random_inter=True, keep_ratio=True):
         super(RandomShape, self).__init__()
         self.sizes = sizes
         self.random_inter = random_inter
+        self.keep_ratio = keep_ratio
         self.interps = [
             cv2.INTER_NEAREST,
             cv2.INTER_LINEAR,
@@ -585,31 +586,50 @@ class RandomShape(BaseOperator):
         ] if random_inter else []
 
     def __call__(self, samples, context=None):
-        shape = np.random.choice(self.sizes)
+        size_idx = np.random.randint(len(self.sizes))
+        shape = self.sizes[size_idx]
         # mask_shape = shape // 4
         method = np.random.choice(self.interps) if self.random_inter \
             else cv2.INTER_NEAREST
         for i in range(len(samples)):
             im = samples[i]['image']
             h, w = im.shape[:2]
-            scale_x = float(shape) / w
-            scale_y = float(shape) / h
-            im = cv2.resize(
-                im, None, None, fx=scale_x, fy=scale_y, interpolation=method)
-            samples[i]['image'] = im
 
-            # gt_mask = samples[i]['gt_mask']
-            # 4倍下采样。与4倍下采样的特征图计算损失。
+            scale_x = float(shape[0]) / w
+            scale_y = float(shape[1]) / h
+            if self.keep_ratio:
+                scale_factor = min(scale_x, scale_y)
+                im = cv2.resize(im, None, None, fx=scale_factor, fy=scale_factor, interpolation=method)
+            else:
+                im = cv2.resize(im, None, None, fx=scale_x, fy=scale_y, interpolation=method)
+
+            gt_mask = samples[i]['gt_mask']
+            # 掩码也跟随着插值成图片大小
             # 不能随机插值方法，有的方法不适合50个通道。
-            # gt_mask = cv2.resize(gt_mask, (mask_shape, mask_shape), interpolation=cv2.INTER_LINEAR)
-            # gt_mask = (gt_mask > 0.5).astype(np.float32)
-            # samples[i]['gt_mask'] = gt_mask
+            gt_mask = cv2.resize(gt_mask, (im.shape[1], im.shape[0]), interpolation=cv2.INTER_LINEAR)
+            gt_mask = (gt_mask > 0.5).astype(np.float32)
+
+            # 填充黑边
+            if self.keep_ratio:
+                pad_im = np.zeros((shape[1], shape[0], 3), np.float32)
+                pad_gt_mask = np.zeros((shape[1], shape[0], gt_mask.shape[2]), np.float32)
+                pad_x = (shape[0] - im.shape[1]) // 2
+                pad_y = (shape[1] - im.shape[0]) // 2
+                pad_im[pad_y:pad_y+im.shape[0], pad_x:pad_x+im.shape[1], :] = im
+                pad_gt_mask[pad_y:pad_y+im.shape[0], pad_x:pad_x+im.shape[1], :] = gt_mask
+                samples[i]['image'] = pad_im
+                samples[i]['gt_mask'] = pad_gt_mask
+            else:
+                samples[i]['image'] = im
+                samples[i]['gt_mask'] = gt_mask
+            samples[i]['h'] = shape[1]
+            samples[i]['w'] = shape[0]
         return samples
 
 class NormalizeImage(BaseOperator):
     def __init__(self,
-                 mean=[0., 0., 0.],
-                 std=[1, 1, 1],
+                 mean=[123.675, 116.28, 103.53],
+                 std=[58.395, 57.12, 57.375],
                  is_scale=True,
                  is_channel_first=True):
         """
@@ -646,16 +666,16 @@ class NormalizeImage(BaseOperator):
                 if k.startswith('image'):
                     im = sample[k]
                     im = im.astype(np.float32, copy=False)
-                    # if self.is_channel_first:
-                    #     mean = np.array(self.mean)[:, np.newaxis, np.newaxis]
-                    #     std = np.array(self.std)[:, np.newaxis, np.newaxis]
-                    # else:
-                    #     mean = np.array(self.mean)[np.newaxis, np.newaxis, :]
-                    #     std = np.array(self.std)[np.newaxis, np.newaxis, :]
+                    if self.is_channel_first:
+                        mean = np.array(self.mean)[:, np.newaxis, np.newaxis]
+                        std = np.array(self.std)[:, np.newaxis, np.newaxis]
+                    else:
+                        mean = np.array(self.mean)[np.newaxis, np.newaxis, :]
+                        std = np.array(self.std)[np.newaxis, np.newaxis, :]
                     if self.is_scale:
                         im = im / 255.0
-                    # im -= mean
-                    # im /= std
+                    im -= mean
+                    im /= std
                     sample[k] = im
         if not batch_input:
             samples = samples[0]
@@ -688,10 +708,9 @@ def jaccard_overlap(sample_bbox, object_bbox):
         sample_bbox_size + object_bbox_size - intersect_size)
     return overlap
 
-class Gt2YoloTarget(BaseOperator):
+class Gt2SoloTarget(BaseOperator):
     """
-    Generate YOLOv3 targets by groud truth data, this operator is only used in
-    fine grained YOLOv3 loss mode
+    Generate SOLO targets.
     """
 
     def __init__(self,
@@ -700,7 +719,7 @@ class Gt2YoloTarget(BaseOperator):
                  downsample_ratios,
                  num_classes=80,
                  iou_thresh=1.):
-        super(Gt2YoloTarget, self).__init__()
+        super(Gt2SoloTarget, self).__init__()
         self.anchors = anchors
         self.anchor_masks = anchor_masks
         self.downsample_ratios = downsample_ratios
