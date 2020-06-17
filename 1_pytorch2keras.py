@@ -10,6 +10,10 @@
 import torch
 import keras
 import keras.layers as layers
+
+from model.head import DecoupledSOLOHead
+from model.neck import FPN
+from model.resnet import Resnet
 from model.solo import SOLO
 
 
@@ -106,11 +110,11 @@ for block_id in range(3):
 
 # FPN部分有8个卷积层
 neck_map = {}
-for k in range(4):
-    neck_map['conv2d_%d' % conv_id] = 'neck.lateral_convs.%d.conv' % k
-    conv_id += 1
-for k in range(4):
-    neck_map['conv2d_%d' % conv_id] = 'neck.fpn_convs.%d.conv' % k
+for k in range(8):
+    if k % 2 == 0:
+        neck_map['conv2d_%d' % conv_id] = 'neck.lateral_convs.%d.conv' % (k//2)
+    else:
+        neck_map['conv2d_%d' % conv_id] = 'neck.fpn_convs.%d.conv' % ((k-1)//2)
     conv_id += 1
 
 # head部分
@@ -204,8 +208,16 @@ def head_copy(conv, gn, conv_name, gn_name):
 
 
 
+
+resnet = Resnet(50)
+fpn = FPN(in_channels=[256, 512, 1024, 2048], out_channels=256, num_outs=5)
+head = DecoupledSOLOHead()
+solo = SOLO(resnet, fpn, head)
+
 inputs = layers.Input(shape=(None, None, 3))
-outs = SOLO(inputs, use_dcn=False)
+# inputs = layers.Input(shape=(416, 416, 3))
+outs = solo(inputs, eval=True)
+
 model = keras.models.Model(inputs=inputs, outputs=outs)
 model.summary()
 keras.utils.vis_utils.plot_model(model, to_file='solo.png', show_shapes=True)

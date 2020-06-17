@@ -13,11 +13,8 @@ import keras.layers as layers
 from keras import backend as K
 from keras.engine.topology import Layer
 
-from model.resnet import Resnet50
 from model.neck import FPN
 from model.head import DecoupledSOLOHead
-
-
 
 
 class SOLO(object):
@@ -28,16 +25,10 @@ class SOLO(object):
         self.head = head
 
     def __call__(self, x, eval):
-        x = Resnet50(x, use_dcn=use_dcn)
-        x = FPN(x, out_channels, start_level, num_outs, add_extra_convs=False)
+        x = self.backbone(x)
+        x = self.neck(x)
         x = self.head(x, eval)
-
-def SOLO(x, use_dcn=False, eval=False, out_channels=256, start_level=0, num_outs=5):
-    x = Resnet50(x, use_dcn=use_dcn)
-    x = FPN(x, out_channels, start_level, num_outs, add_extra_convs=False)
-    decoupledSOLOHead = DecoupledSOLOHead()
-    x = decoupledSOLOHead(x, eval)
-    return x
+        return x
 
 
 

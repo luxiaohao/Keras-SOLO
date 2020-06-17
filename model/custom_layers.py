@@ -24,6 +24,8 @@ class Conv2dUnit(object):
                    use_bias=use_bias,
                    activation='linear',
                    kernel_initializer=keras.initializers.RandomNormal(mean=0.0, stddev=0.01))
+        self.bn = None
+        self.act = None
         if bn:
             self.bn = layers.BatchNormalization()
         if act == 'leaky':
@@ -40,16 +42,23 @@ class Conv2dUnit(object):
         return x
 
 class Conv3x3(object):
-    def __init__(self, filters2, use_dcn):
+    def __init__(self, filters2, strides, use_dcn):
         super(Conv3x3, self).__init__()
         if use_dcn:
             self.conv2d_unit = None
         else:
-            self.conv2d_unit = Conv2dUnit(filters2, 3, strides=1, padding='same', use_bias=False, bn=0, act=None)
+            self.pad1 = None
+            if strides == 2:
+                self.pad1 = layers.ZeroPadding2D(padding=((1, 0), (1, 0)))
+                self.conv2d_unit = Conv2dUnit(filters2, 3, strides=strides, padding='valid', use_bias=False, bn=0, act=None)
+            else:
+                self.conv2d_unit = Conv2dUnit(filters2, 3, strides=strides, padding='same', use_bias=False, bn=0, act=None)
         self.bn = layers.BatchNormalization()
         self.act = layers.advanced_activations.ReLU()
 
     def __call__(self, x):
+        if self.pad1:
+            x = self.pad1(x)
         x = self.conv2d_unit(x)
         x = self.bn(x)
         x = self.act(x)
