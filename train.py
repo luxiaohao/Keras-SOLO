@@ -236,16 +236,14 @@ def yolo_loss(args, num_classes, iou_loss_thresh, anchors):
 
 
 def multi_thread_op(i, samples, decodeImage, context, train_dataset, with_mixup, mixupImage,
-                     photometricDistort, randomCrop, randomFlipImage, normalizeBox, padBox, bboxXYXY2XYWH):
+                     photometricDistort, randomCrop, randomFlipImage, padBox):
     samples[i] = decodeImage(samples[i], context, train_dataset)
     if with_mixup:
         samples[i] = mixupImage(samples[i], context)
     samples[i] = photometricDistort(samples[i], context)
     samples[i] = randomCrop(samples[i], context)
     samples[i] = randomFlipImage(samples[i], context)
-    samples[i] = normalizeBox(samples[i], context)
     samples[i] = padBox(samples[i], context)
-    samples[i] = bboxXYXY2XYWH(samples[i], context)
 
 if __name__ == '__main__':
     iter_id = 0
@@ -286,9 +284,7 @@ if __name__ == '__main__':
     photometricDistort = PhotometricDistort()   # 颜色扭曲
     randomCrop = RandomCrop()                   # 随机裁剪
     randomFlipImage = RandomFlipImage()         # 随机翻转
-    normalizeBox = NormalizeBox()               # 将物体的左上角坐标、右下角坐标中的横坐标/图片宽、纵坐标/图片高 以归一化坐标。
     padBox = PadBox(cfg.num_max_boxes)          # 如果gt_bboxes的数量少于num_max_boxes，那么填充坐标是0的bboxes以凑够num_max_boxes。
-    bboxXYXY2XYWH = BboxXYXY2XYWH()             # sample['gt_bbox']被改写为cx_cy_w_h格式。
 
     # batch_transforms
     # 6个分辨率(w, h)，随机选一个分辨率(w, h)训练。也随机选一种插值方式。原版SOLO中，因为设定了size_divisor=32，
@@ -296,10 +292,10 @@ if __name__ == '__main__':
     # 这里为了使得一批图片能被一个四维张量表示，所以按照size_divisor=None处理，即统一填充到被选中的分辨率(w, h)
     randomShape = RandomShape()
     normalizeImage = NormalizeImage(is_scale=False, is_channel_first=False)  # 图片归一化。
-    gt2SoloTarget = Gt2SoloTarget(cfg.anchors,
-                                  cfg.anchor_masks,
-                                  cfg.downsample_ratios,
-                                  num_classes)             # 填写target0、target1、target2张量。
+    # gt2SoloTarget = Gt2SoloTarget(cfg.anchors,
+    #                               cfg.anchor_masks,
+    #                               cfg.downsample_ratios,
+    #                               num_classes)             # 填写target0、target1、target2张量。
 
     # 保存模型的目录
     if not os.path.exists('./weights'): os.mkdir('./weights')
@@ -333,7 +329,7 @@ if __name__ == '__main__':
             threads = []
             for i in range(batch_size):
                 t = threading.Thread(target=multi_thread_op, args=(i, samples, decodeImage, context, train_dataset, with_mixup, mixupImage,
-                                                                   photometricDistort, randomCrop, randomFlipImage, normalizeBox, padBox, bboxXYXY2XYWH))
+                                                                   photometricDistort, randomCrop, randomFlipImage, padBox))
                 threads.append(t)
                 t.start()
             # 等待所有线程任务结束。
@@ -343,6 +339,7 @@ if __name__ == '__main__':
             # debug  看数据增强后的图片。由于有随机裁剪，所以有的物体掩码不完整。
             # if os.path.exists('temp/'): shutil.rmtree('temp/')
             # os.mkdir('temp/')
+            # samples = randomShape(samples, context)
             for r, sample in enumerate(samples):
                 img = sample['image']
                 gt_score = sample['gt_score']

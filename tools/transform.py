@@ -609,6 +609,9 @@ class RandomShape(BaseOperator):
             gt_mask = cv2.resize(gt_mask, (im.shape[1], im.shape[0]), interpolation=cv2.INTER_LINEAR)
             gt_mask = (gt_mask > 0.5).astype(np.float32)
 
+            # 方框也要变
+            gt_bbox = samples[i]['gt_bbox']
+
             # 填充黑边
             if self.keep_ratio:
                 pad_im = np.zeros((shape[1], shape[0], 3), np.float32)
@@ -619,9 +622,13 @@ class RandomShape(BaseOperator):
                 pad_gt_mask[pad_y:pad_y+im.shape[0], pad_x:pad_x+im.shape[1], :] = gt_mask
                 samples[i]['image'] = pad_im
                 samples[i]['gt_mask'] = pad_gt_mask
+                gt_bbox *= [scale_factor, scale_factor, scale_factor, scale_factor]
+                gt_bbox += [pad_x, pad_y, pad_x, pad_y]
             else:
                 samples[i]['image'] = im
                 samples[i]['gt_mask'] = gt_mask
+                gt_bbox *= [scale_x, scale_y, scale_x, scale_y]
+            samples[i]['gt_bbox'] = gt_bbox
             samples[i]['h'] = shape[1]
             samples[i]['w'] = shape[0]
         return samples
