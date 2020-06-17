@@ -575,7 +575,7 @@ class TrainConfig(object):
         self.score_thr = 0.1
         # self.mask_thr = 0.5
         self.mask_thr = 0.005
-        self.update_thr = 0.05
+        self.update_thr = 0.001
         self.kernel = 'gaussian'
         self.sigma = 2.0
         self.max_per_img = 100
