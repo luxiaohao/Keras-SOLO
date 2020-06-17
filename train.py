@@ -290,7 +290,10 @@ if __name__ == '__main__':
     # 6个分辨率(w, h)，随机选一个分辨率(w, h)训练。也随机选一种插值方式。原版SOLO中，因为设定了size_divisor=32，
     # 所以被填充黑边的宽（或者高）会填充最少的黑边使得被32整除。所以一个batch最后所有的图片的大小有很大概率是不同的，
     # 这里为了使得一批图片能被一个四维张量表示，所以按照size_divisor=None处理，即统一填充到被选中的分辨率(w, h)
-    randomShape = RandomShape()
+    randomShape = RandomShape()     # pytorch版把掩码的注解放到cpu内存里('DefaultFormatBundle')。想个法子也弄一下。
+                                    # pytorch版貌似就是一张图的一种注解独占一个张量的。比如输入图片images大小不一样，
+                                    # 每张图片的掩码个数也不一样（作者没有用全是0的掩码凑够cfg.num_max_boxes），
+                                    # 都无法用一个张量去表示这一批图片 或是 表示这一批图片的掩码注解。我在考虑是否跟随原作者。。。
     normalizeImage = NormalizeImage(is_scale=False, is_channel_first=False)  # 图片归一化。
     # gt2SoloTarget = Gt2SoloTarget(cfg.anchors,
     #                               cfg.anchor_masks,
