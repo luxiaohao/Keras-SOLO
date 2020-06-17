@@ -11,6 +11,7 @@ __pycache__/
 /images/res/*.jpg
 /eval_results/
 /results/
+/temp/
 /weights/
 /annotation_json/
 /model/__pycache__/

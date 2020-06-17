@@ -89,7 +89,7 @@ class DecodeImage(BaseOperator):
             self.__call__(sample['mixup'], context, coco)
 
         # 掩码图片。如果是训练集的话。
-        '''if 'gt_poly' in sample:
+        if 'gt_poly' in sample:
             gt_poly = sample['gt_poly']
             assert len(gt_poly) == len(sample['gt_bbox']), "Poly Numbers Error."
             gt_mask = []
@@ -117,7 +117,7 @@ class DecodeImage(BaseOperator):
                 gt_mask = masks.transpose(1, 2, 0)     # shape=(height, width, N)
             else:   # 对于没有gt的纯背景图，弄1个方便后面的增强跟随sample['image']
                 gt_mask = np.zeros((im.shape[0], im.shape[1], 1), dtype=np.int32)
-            sample['gt_mask'] = gt_mask'''
+            sample['gt_mask'] = gt_mask
         return sample
 
 
@@ -332,8 +332,8 @@ class RandomCrop(BaseOperator):
 
             if found:
                 sample['image'] = self._crop_image(sample['image'], crop_box)
-                # gt_mask = self._crop_image(sample['gt_mask'], crop_box)    # 掩码裁剪
-                # sample['gt_mask'] = np.take(gt_mask, valid_ids, axis=-1)   # 掩码筛选
+                gt_mask = self._crop_image(sample['gt_mask'], crop_box)    # 掩码裁剪
+                sample['gt_mask'] = np.take(gt_mask, valid_ids, axis=-1)   # 掩码筛选
                 sample['gt_bbox'] = np.take(cropped_box, valid_ids, axis=0)
                 sample['gt_class'] = np.take(
                     sample['gt_class'], valid_ids, axis=0)
@@ -444,7 +444,7 @@ class RandomFlipImage(BaseOperator):
         for sample in samples:
             gt_bbox = sample['gt_bbox']
             im = sample['image']
-            # gt_mask = sample['gt_mask']
+            gt_mask = sample['gt_mask']
             if not isinstance(im, np.ndarray):
                 raise TypeError("{}: image is not a numpy array.".format(self))
             if len(im.shape) != 3:
@@ -452,7 +452,7 @@ class RandomFlipImage(BaseOperator):
             height, width, _ = im.shape
             if np.random.uniform(0, 1) < self.prob:
                 im = im[:, ::-1, :]
-                # gt_mask = gt_mask[:, ::-1, :]
+                gt_mask = gt_mask[:, ::-1, :]
                 if gt_bbox.shape[0] == 0:
                     return sample
                 oldx1 = gt_bbox[:, 0].copy()
@@ -474,7 +474,7 @@ class RandomFlipImage(BaseOperator):
                                                         height, width)
                 sample['flipped'] = True
                 sample['image'] = im
-                # sample['gt_mask'] = gt_mask
+                sample['gt_mask'] = gt_mask
         sample = samples if batch_input else samples[0]
         return sample
 
@@ -518,11 +518,11 @@ class PadBox(BaseOperator):
         sample['gt_bbox'] = pad_bbox
 
         # 掩码
-        # mask = sample['gt_mask']
-        # pad_mask = np.zeros((mask.shape[0], mask.shape[1], num_max), dtype=np.float32)
-        # if gt_num > 0:
-        #     pad_mask[:, :, :gt_num] = mask[:, :, :gt_num]
-        # sample['gt_mask'] = pad_mask
+        mask = sample['gt_mask']
+        pad_mask = np.zeros((mask.shape[0], mask.shape[1], num_max), dtype=np.float32)
+        if gt_num > 0:
+            pad_mask[:, :, :gt_num] = mask[:, :, :gt_num]
+        sample['gt_mask'] = pad_mask
 
         if 'gt_class' in fields:
             pad_class = np.zeros((num_max), dtype=np.int32)

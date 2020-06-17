@@ -382,6 +382,27 @@ for yy, m in enumerate(masks):
 # aaa01 = np.mean(aaa00)
 # aaa02 = np.var(aaa00)
 
+
+
+
+def build_dataset(cfg, default_args=None):
+    if isinstance(cfg, (list, tuple)):
+        print(1)
+    # elif cfg['type'] == 'RepeatDataset':
+    #     print(1)
+    elif isinstance(cfg['ann_file'], (list, tuple)):
+        print(1)
+    else:
+        print(1)
+
+
+a = dict(
+    imgs_per_gpu=2,
+    ann_file='annotations/instances_val2017.json',
+    workers_per_gpu=2)
+
+build_dataset(a)
+
 print()
 
 

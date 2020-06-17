@@ -12,6 +12,7 @@ from collections import deque
 import math
 import json
 import time
+import shutil
 import threading
 import datetime
 import keras
@@ -247,59 +248,11 @@ def multi_thread_op(i, samples, decodeImage, context, train_dataset, with_mixup,
     samples[i] = bboxXYXY2XYWH(samples[i], context)
 
 if __name__ == '__main__':
+    iter_id = 0
     cfg = TrainConfig()
 
     class_names = get_classes(cfg.classes_path)
     num_classes = len(class_names)
-    _anchors = copy.deepcopy(cfg.anchors)
-    num_anchors = len(cfg.anchor_masks[0])  # 每个输出层有几个先验框
-    _anchors = np.array(_anchors)
-    _anchors = np.reshape(_anchors, (-1, num_anchors, 2))
-    _anchors = _anchors.astype(np.float32)
-
-    # 步id，无需设置，会自动读。
-    iter_id = 0
-
-    # 多尺度训练
-    inputs = layers.Input(shape=(None, None, 3))
-    model_body = YOLOv4(inputs, num_classes, num_anchors)
-    solo = SOLO(inputs, out_channels=256, start_level=0, num_outs=5)
-    _decode = Decode(cfg.conf_thresh, cfg.nms_thresh, cfg.input_shape, model_body, class_names)
-
-    # 模式。 0-从头训练，1-读取之前的模型继续训练（model_path可以是'yolov4.h5'、'./weights/step00001000.h5'这些。）
-    pattern = cfg.pattern
-    if pattern == 1:
-        model_body.load_weights(cfg.model_path, by_name=True, skip_mismatch=True)
-        strs = cfg.model_path.split('step')
-        if len(strs) == 2:
-            iter_id = int(strs[1][:8])
-
-        # 冻结，使得需要的显存减少。6G的卡建议这样配置。11G的卡建议不冻结。
-        # freeze_before = 'conv2d_60'
-        # freeze_before = 'conv2d_72'
-        freeze_before = 'conv2d_86'
-        for i in range(len(model_body.layers)):
-            ly = model_body.layers[i]
-            if ly.name == freeze_before:
-                break
-            else:
-                ly.trainable = False
-    elif pattern == 0:
-        pass
-
-    y_true = [
-        layers.Input(name='input_2', shape=(None, None, 3, (num_classes + 5))),  # label_sbbox
-        layers.Input(name='input_3', shape=(None, None, 3, (num_classes + 5))),  # label_mbbox
-        layers.Input(name='input_4', shape=(None, None, 3, (num_classes + 5))),  # label_lbbox
-        layers.Input(name='input_5', shape=(cfg.num_max_boxes, 4)),             # true_bboxes
-    ]
-    loss_list = layers.Lambda(yolo_loss, name='yolo_loss',
-                           arguments={'num_classes': num_classes, 'iou_loss_thresh': cfg.iou_loss_thresh,
-                                      'anchors': _anchors})([*model_body.output, *y_true])
-    model = keras.models.Model([model_body.input, *y_true], loss_list)
-    model.summary()
-    # keras.utils.vis_utils.plot_model(model_body, to_file='yolov4.png', show_shapes=True)
-
 
     # 种类id
     _catid2clsid = copy.deepcopy(catid2clsid)
@@ -337,17 +290,17 @@ if __name__ == '__main__':
     padBox = PadBox(cfg.num_max_boxes)          # 如果gt_bboxes的数量少于num_max_boxes，那么填充坐标是0的bboxes以凑够num_max_boxes。
     bboxXYXY2XYWH = BboxXYXY2XYWH()             # sample['gt_bbox']被改写为cx_cy_w_h格式。
     # batch_transforms
-    randomShape = RandomShape()                 # 多尺度训练。随机选一个尺度。也随机选一种插值方式。
-    normalizeImage = NormalizeImage(is_scale=True, is_channel_first=False)  # 图片归一化。直接除以255。
-    gt2YoloTarget = Gt2YoloTarget(cfg.anchors,
-                                  cfg.anchor_masks,
-                                  cfg.downsample_ratios,
-                                  num_classes)             # 填写target0、target1、target2张量。
+    # randomShape = RandomShape()                 # 多尺度训练。随机选一个尺度。也随机选一种插值方式。
+    # normalizeImage = NormalizeImage(is_scale=True, is_channel_first=False)  # 图片归一化。直接除以255。
+    # gt2YoloTarget = Gt2YoloTarget(cfg.anchors,
+    #                               cfg.anchor_masks,
+    #                               cfg.downsample_ratios,
+    #                               num_classes)             # 填写target0、target1、target2张量。
 
     # 保存模型的目录
     if not os.path.exists('./weights'): os.mkdir('./weights')
 
-    model.compile(loss={'yolo_loss': lambda y_true, y_pred: y_pred}, optimizer=keras.optimizers.Adam(lr=cfg.lr))
+    # model.compile(loss={'yolo_loss': lambda y_true, y_pred: y_pred}, optimizer=keras.optimizers.Adam(lr=cfg.lr))
 
     time_stat = deque(maxlen=20)
     start_time = time.time()
@@ -382,6 +335,20 @@ if __name__ == '__main__':
             # 等待所有线程任务结束。
             for t in threads:
                 t.join()
+
+            # debug  看数据增强后的图片。由于有随机裁剪，所以有的物体掩码不完整。
+            # if os.path.exists('temp/'): shutil.rmtree('temp/')
+            # os.mkdir('temp/')
+            # for r, sample in enumerate(samples):
+            #     img = sample['image']
+            #     gt_score = sample['gt_score']
+            #     gt_mask = sample['gt_mask']
+            #     aa = gt_mask.transpose(2, 0, 1)
+            #     cv2.imwrite('temp/%d.jpg'%r, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+            #     for rr, sc in enumerate(gt_score):
+            #         if sc > 0:
+            #             m = gt_mask[:, :, rr]
+            #             cv2.imwrite('temp/%d_%d.jpg'%(r, rr), m*255)
 
             # batch_transforms
             samples = randomShape(samples, context)
