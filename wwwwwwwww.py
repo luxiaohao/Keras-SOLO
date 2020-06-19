@@ -1,4 +1,26 @@
 
+import mmcv
+import numpy as np
+
+
+
+output_stride = 4
+
+
+seg_mask = np.zeros((100, 100, 3))
+
+# ins
+seg_mask = mmcv.imrescale(seg_mask, scale=1. / output_stride)
+
+
+
+print()
+
+
+
+
+
+
 ann = {}
 ann['iscrowd'] = 1
 

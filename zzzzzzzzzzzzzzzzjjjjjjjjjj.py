@@ -3,6 +3,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.cnn import normal_init
+from mmdet.ops import DeformConv, roi_align
+from mmdet.core import multi_apply, bbox2roi, matrix_nms
+from ..builder import build_loss
+from ..registry import HEADS
+from ..utils import bias_init_with_prob, ConvModule
 
 INF = 1e8
 
@@ -25,64 +30,7 @@ def dice_loss(input, target):
     d = (2 * a) / (b + c)
     return 1-d
 
-
-
-
-def matrix_nms(seg_masks, cate_labels, cate_scores, kernel='gaussian', sigma=2.0, sum_masks=None):
-    """Matrix NMS for multi-class masks.
-
-    Args:
-        seg_masks (Tensor): shape (n, h, w)   True、False组成的掩码
-        cate_labels (Tensor): shape (n), mask labels in descending order
-        cate_scores (Tensor): shape (n), mask scores in descending order
-        kernel (str):  'linear' or 'gauss'
-        sigma (float): std in gaussian method
-        sum_masks (Tensor):  shape (n, )      n个物体的面积
-
-    Returns:
-        Tensor: cate_scores_update, tensors of shape (n)
-    """
-    n_samples = len(cate_labels)   # 物体数
-    if n_samples == 0:
-        return []
-    if sum_masks is None:
-        sum_masks = seg_masks.sum((1, 2)).float()
-    seg_masks = seg_masks.reshape(n_samples, -1).float()   # [n, h*w]  掩码由True、False变成0、1
-    # inter.
-    inter_matrix = torch.mm(seg_masks, seg_masks.transpose(1, 0))   # [n, n] 自己乘以自己的转置。两两之间的交集面积。
-    # union.
-    sum_masks_x = sum_masks.expand(n_samples, n_samples)     # [n, n]  sum_masks重复了n行得到sum_masks_x
-    # iou.
-    iou_matrix = (inter_matrix / (sum_masks_x + sum_masks_x.transpose(1, 0) - inter_matrix)).triu(diagonal=1)   # 只取上三角部分
-    # label_specific matrix.
-    cate_labels_x = cate_labels.expand(n_samples, n_samples)   # [n, n]  cate_labels重复了n行得到cate_labels_x
-    label_matrix = (cate_labels_x == cate_labels_x.transpose(1, 0)).float().triu(diagonal=1)
-
-    # IoU compensation
-    compensate_iou, _ = (iou_matrix * label_matrix).max(0)
-    compensate_iou = compensate_iou.expand(n_samples, n_samples).transpose(1, 0)
-
-    # IoU decay
-    decay_iou = iou_matrix * label_matrix
-
-    # matrix nms
-    if kernel == 'gaussian':
-        decay_matrix = torch.exp(-1 * sigma * (decay_iou ** 2))
-        compensate_matrix = torch.exp(-1 * sigma * (compensate_iou ** 2))
-        decay_coefficient, _ = (decay_matrix / compensate_matrix).min(0)
-    elif kernel == 'linear':
-        decay_matrix = (1-decay_iou)/(1-compensate_iou)
-        decay_coefficient, _ = decay_matrix.min(0)
-    else:
-        raise NotImplementedError
-
-    # update the score.
-    cate_scores_update = cate_scores * decay_coefficient
-    return cate_scores_update
-
-
-
-
+@HEADS.register_module
 class DecoupledSOLOHead(nn.Module):
     def __init__(self,
                  num_classes,
@@ -113,11 +61,11 @@ class DecoupledSOLOHead(nn.Module):
         self.base_edge_list = base_edge_list
         self.scale_ranges = scale_ranges
         self.with_deform = with_deform
-        # self.loss_cate = build_loss(loss_cate)
-        # self.ins_loss_weight = loss_ins['loss_weight']
+        self.loss_cate = build_loss(loss_cate)
+        self.ins_loss_weight = loss_ins['loss_weight']
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
-        # self._init_layers()
+        self._init_layers()
 
     def _init_layers(self):
         norm_cfg = dict(type='GN', num_groups=32, requires_grad=True)
@@ -249,7 +197,15 @@ class DecoupledSOLOHead(nn.Module):
              cfg,
              gt_bboxes_ignore=None):
         featmap_sizes = [featmap.size()[-2:] for featmap in
-                         ins_preds_x]
+                         ins_preds_x]   # [[104, 104], [104, 104], [52, 52], [26, 26], [26, 26]]
+
+
+
+
+        # ins_label_list       里有形状为[?1, 104, 104]、[?2, 104, 104]、[?3, 52, 52]、...的5个数组。是不支持拼接的。其他list同理。
+        # cate_label_list      里有形状为[40, 40]、[36, 36]、[24, 24]、...的5个数组。
+        # ins_ind_label_list   里有形状为[?1, ]、[?2, ]、[?3, ]、...的5个数组。全是1。
+        # ins_ind_label_list_xy里有形状为[?1, 2]、[?2, 2]、[?3, 2]、...的5个数组。[?1, 2]表示正样本在cate_label_list[0]里的下标。
         ins_label_list, cate_label_list, ins_ind_label_list, ins_ind_label_list_xy = multi_apply(
             self.solo_target_single,
             gt_bbox_list,
@@ -312,22 +268,40 @@ class DecoupledSOLOHead(nn.Module):
                                gt_labels_raw,
                                gt_masks_raw,
                                featmap_sizes=None):
+        '''
+
+        Args: gt_xxx都是这一批里一张图片的标记
+            gt_bboxes_raw:    shape=[n, 4]
+            gt_labels_raw:    shape=[n, ]
+            gt_masks_raw:     shape=[n, ?, ?]
+            featmap_sizes:    [[104, 104], [104, 104], [52, 52], [26, 26], [26, 26]]
+
+        Returns:
+
+        '''
 
         device = gt_labels_raw[0].device
         # ins
-        gt_areas = torch.sqrt((gt_bboxes_raw[:, 2] - gt_bboxes_raw[:, 0]) * (
+        gt_areas = torch.sqrt((gt_bboxes_raw[:, 2] - gt_bboxes_raw[:, 0]) * (   # 面积， [n, ]
                 gt_bboxes_raw[:, 3] - gt_bboxes_raw[:, 1]))
         ins_label_list = []
         cate_label_list = []
         ins_ind_label_list = []
         ins_ind_label_list_xy = []
+
+        # 遍历每个输出层
+        #           (1,     96)            8     [104, 104]     40
         for (lower_bound, upper_bound), stride, featmap_size, num_grid \
                 in zip(self.scale_ranges, self.strides, featmap_sizes, self.seg_num_grids):
 
+            # [40*40, 104, 104]  这一输出层，一个格子占用一张掩码图。
             ins_label = torch.zeros([num_grid**2, featmap_size[0], featmap_size[1]], dtype=torch.uint8, device=device)
+            # [40, 40]  种类id
             cate_label = torch.zeros([num_grid, num_grid], dtype=torch.int64, device=device)
+            # [40*40, ]  ins_label中，某个格子是否被gt占用
             ins_ind_label = torch.zeros([num_grid**2], dtype=torch.bool, device=device)
 
+            # 这一张图片，所有物体，若面积在这个范围，这一输出层就负责预测。因为面积范围有交集，所以一个gt可以被分配到多个输出层上。
             hit_indices = ((gt_areas >= lower_bound) & (gt_areas <= upper_bound)).nonzero().flatten()
 
             if len(hit_indices) == 0:
@@ -339,56 +313,62 @@ class DecoupledSOLOHead(nn.Module):
                 ins_ind_label_list.append(ins_ind_label)
                 ins_ind_label_list_xy.append(cate_label.nonzero())
                 continue
-            gt_bboxes = gt_bboxes_raw[hit_indices]
-            gt_labels = gt_labels_raw[hit_indices]
-            gt_masks = gt_masks_raw[hit_indices.cpu().numpy(), ...]
+            gt_bboxes = gt_bboxes_raw[hit_indices]   # shape=[m, 4]  这一层负责预测的物体的bbox
+            gt_labels = gt_labels_raw[hit_indices]   # shape=[m, xxxx]  这一层负责预测的物体的类别id
+            gt_masks = gt_masks_raw[hit_indices.cpu().numpy(), ...]   # [m, ?, ?]
 
-            half_ws = 0.5 * (gt_bboxes[:, 2] - gt_bboxes[:, 0]) * self.sigma
-            half_hs = 0.5 * (gt_bboxes[:, 3] - gt_bboxes[:, 1]) * self.sigma
+            half_ws = 0.5 * (gt_bboxes[:, 2] - gt_bboxes[:, 0]) * self.sigma   # shape=[m, ]  宽的一半
+            half_hs = 0.5 * (gt_bboxes[:, 3] - gt_bboxes[:, 1]) * self.sigma   # shape=[m, ]  高的一半
 
-            output_stride = stride / 2
+            output_stride = stride / 2   # 因为网络最后对ins_feat_x、ins_feat_y进行上采样，所以stride / 2
 
             for seg_mask, gt_label, half_h, half_w in zip(gt_masks, gt_labels, half_hs, half_ws):
-                if seg_mask.sum() < 10:
+                if seg_mask.sum() < 10:   # 忽略太小的物体
                    continue
                 # mass center
 
-                upsampled_size = (featmap_sizes[0][0] * 4, featmap_sizes[0][1] * 4)
-                center_h, center_w = ndimage.measurements.center_of_mass(seg_mask)
-                coord_w = int((center_w / upsampled_size[1]) // (1. / num_grid))
-                coord_h = int((center_h / upsampled_size[0]) // (1. / num_grid))
+                upsampled_size = (featmap_sizes[0][0] * 4, featmap_sizes[0][1] * 4)   # 也就是输入图片的大小
+                center_h, center_w = ndimage.measurements.center_of_mass(seg_mask)    # 求物体掩码的质心。scipy提供技术支持。
+                coord_w = int((center_w / upsampled_size[1]) // (1. / num_grid))      # 物体质心落在了第几列格子
+                coord_h = int((center_h / upsampled_size[0]) // (1. / num_grid))      # 物体质心落在了第几行格子
 
                 # left, top, right, down
-                top_box = max(0, int(((center_h - half_h) / upsampled_size[0]) // (1. / num_grid)))
-                down_box = min(num_grid - 1, int(((center_h + half_h) / upsampled_size[0]) // (1. / num_grid)))
-                left_box = max(0, int(((center_w - half_w) / upsampled_size[1]) // (1. / num_grid)))
-                right_box = min(num_grid - 1, int(((center_w + half_w) / upsampled_size[1]) // (1. / num_grid)))
+                top_box = max(0, int(((center_h - half_h) / upsampled_size[0]) // (1. / num_grid)))      # 物体左上角落在了第几行格子
+                down_box = min(num_grid - 1, int(((center_h + half_h) / upsampled_size[0]) // (1. / num_grid)))    # 物体右下角落在了第几行格子
+                left_box = max(0, int(((center_w - half_w) / upsampled_size[1]) // (1. / num_grid)))     # 物体左上角落在了第几列格子
+                right_box = min(num_grid - 1, int(((center_w + half_w) / upsampled_size[1]) // (1. / num_grid)))   # 物体右下角落在了第几列格子
 
+                # 物体的宽高并没有那么重要。将物体的左上角、右下角限制在质心所在的九宫格内。当物体很小时，物体的左上角、右下角、质心位于同一个格子。
                 top = max(top_box, coord_h-1)
                 down = min(down_box, coord_h+1)
                 left = max(coord_w-1, left_box)
                 right = min(right_box, coord_w+1)
 
-                # squared
+                # squared。 # [40, 40]的网格，将物体占的格子填上类别id。
                 cate_label[top:(down+1), left:(right+1)] = gt_label
-                # ins
+                # ins  [img_h, img_w]->[img_h/output_stride, img_w/output_stride]  将gt的掩码下采样output_stride倍。
                 seg_mask = mmcv.imrescale(seg_mask, scale=1. / output_stride)
                 seg_mask = torch.Tensor(seg_mask)
                 for i in range(top, down+1):
                     for j in range(left, right+1):
                         label = int(i * num_grid + j)
                         ins_label[label, :seg_mask.shape[0], :seg_mask.shape[1]] = seg_mask
-                        ins_ind_label[label] = True
+                        ins_ind_label[label] = True   # ins_label中，这个位置的格子被gt占用
 
-            ins_label = ins_label[ins_ind_label]
-            ins_label_list.append(ins_label)
+            ins_label = ins_label[ins_ind_label]   # ins_label中，抽出被gt占用的格子的掩码，减少内存占用。
+            ins_label_list.append(ins_label)     # [?, 104, 104]，  ?>=m，因为一个gt可能占用多个格子。
 
-            cate_label_list.append(cate_label)
+            cate_label_list.append(cate_label)   # [40, 40]的网格，类别id。
 
-            ins_ind_label = ins_ind_label[ins_ind_label]
-            ins_ind_label_list.append(ins_ind_label)
+            ins_ind_label = ins_ind_label[ins_ind_label]  # 全是1
+            ins_ind_label_list.append(ins_ind_label)  #  [?, ]
 
-            ins_ind_label_list_xy.append(cate_label.nonzero())
+            ins_ind_label_list_xy.append(cate_label.nonzero())   # 非零元素的下标。[[gt1_coord1, gt1_coord2], [gt2_coord1, gt2_coord2], ...]
+
+        # ins_label_list       里有形状为[?1, 104, 104]、[?2, 104, 104]、[?3, 52, 52]、...的5个数组。是不支持拼接的。其他list同理。
+        # cate_label_list      里有形状为[40, 40]、[36, 36]、[24, 24]、...的5个数组。
+        # ins_ind_label_list   里有形状为[?1, ]、[?2, ]、[?3, ]、...的5个数组。全是1。
+        # ins_ind_label_list_xy里有形状为[?1, 2]、[?2, 2]、[?3, 2]、...的5个数组。[?1, 2]表示正样本在cate_label_list[0]里的下标。
         return ins_label_list, cate_label_list, ins_ind_label_list, ins_ind_label_list_xy
 
     def get_seg(self, seg_preds_x, seg_preds_y, cate_preds, img_metas, cfg, rescale=None):
@@ -447,6 +427,11 @@ class DecoupledSOLOHead(nn.Module):
 
         '''
 
+
+        # overall info.
+        h, w, _ = img_shape
+        upsampled_size_out = (featmap_size[0] * 4, featmap_size[1] * 4)   # (s4*4, s4*4)
+
         # trans trans_diff.
         trans_size = torch.Tensor(self.seg_num_grids).pow(2).cumsum(0).long()   # [40*40, 40*40+36*36, 40*40+36*36+24*24, ...]
         trans_diff = torch.ones(trans_size[-1].item(), device=cate_preds.device).long()   # [3872, ] 每个格子填一个1
@@ -472,46 +457,44 @@ class DecoupledSOLOHead(nn.Module):
             strides[trans_size[ind_ - 1]:trans_size[ind_]] *= self.strides[ind_]           # 第1个输出层的stride是8，...
 
         # process.
-        inds = (cate_preds > cfg.score_thr)   # [[3623, 17], [3623, 60], [3639, 17], ...]   分数超过阈值的物体所在格子
+        inds = (cate_preds > cfg.score_thr)
         cate_scores = cate_preds[inds]
 
         inds = inds.nonzero()
-        trans_diff = torch.index_select(trans_diff, dim=0, index=inds[:, 0])   # [3472, 3472, 3472, ...]   格子所在输出层的分类分支在cate_preds中的偏移
-        seg_diff = torch.index_select(seg_diff, dim=0, index=inds[:, 0])       # [100, 100, 100, ...]      格子所在输出层的掩码分支在seg_preds_x中的偏移
-        num_grids = torch.index_select(num_grids, dim=0, index=inds[:, 0])     # [16, 16, 16, ...]         格子所在输出层每一行有多少个格子
-        strides = torch.index_select(strides, dim=0, index=inds[:, 0])         # [32, 32, 32, ...]         格子所在输出层的stride
+        trans_diff = torch.index_select(trans_diff, dim=0, index=inds[:, 0])
+        seg_diff = torch.index_select(seg_diff, dim=0, index=inds[:, 0])
+        num_grids = torch.index_select(num_grids, dim=0, index=inds[:, 0])
+        strides = torch.index_select(strides, dim=0, index=inds[:, 0])
 
-        y_inds = (inds[:, 0] - trans_diff) // num_grids   # 格子行号
-        x_inds = (inds[:, 0] - trans_diff) % num_grids    # 格子列号
-        y_inds += seg_diff   # 格子行号在seg_preds_y中的绝对位置
-        x_inds += seg_diff   # 格子列号在seg_preds_x中的绝对位置
+        y_inds = (inds[:, 0] - trans_diff) // num_grids
+        x_inds = (inds[:, 0] - trans_diff) % num_grids
+        y_inds += seg_diff
+        x_inds += seg_diff
 
-        cate_labels = inds[:, 1]   # 类别
-        mask_x = seg_preds_x[x_inds, ...]   # [11, s4, s4]
-        mask_y = seg_preds_y[y_inds, ...]   # [11, s4, s4]
-        seg_masks_soft = mask_x * mask_y    # [11, s4, s4]  物体的mask，逐元素相乘得到。
+        cate_labels = inds[:, 1]
+        seg_masks_soft = seg_preds_x[x_inds, ...] * seg_preds_y[y_inds, ...]
         seg_masks = seg_masks_soft > cfg.mask_thr
-        sum_masks = seg_masks.sum((1, 2)).float()   # [11, ]  11个物体的面积
-        keep = sum_masks > strides   # 面积大于这一层的stride才保留
+        sum_masks = seg_masks.sum((1, 2)).float()
+        keep = sum_masks > strides
 
-        seg_masks_soft = seg_masks_soft[keep, ...]   # 用概率表示的掩码
-        seg_masks = seg_masks[keep, ...]             # 用True、False表示的掩码
-        cate_scores = cate_scores[keep]    # 类别得分
-        sum_masks = sum_masks[keep]        # 面积
-        cate_labels = cate_labels[keep]    # 类别
-        # mask scoring   是1的像素的 概率总和 占 面积（是1的像素数） 的比重
+        seg_masks_soft = seg_masks_soft[keep, ...]
+        seg_masks = seg_masks[keep, ...]
+        cate_scores = cate_scores[keep]
+        sum_masks = sum_masks[keep]
+        cate_labels = cate_labels[keep]
+        # mask scoring
         seg_score = (seg_masks_soft * seg_masks.float()).sum((1, 2)) / sum_masks
-        cate_scores *= seg_score   # 类别得分乘上这个比重得到新的类别得分。因为有了mask scoring机制，所以分数一般比其它算法如yolact少。
+        cate_scores *= seg_score
 
-        if len(cate_scores) == 0:   # 没有物体，直接return
+        if len(cate_scores) == 0:
             return None
 
         # sort and keep top nms_pre
-        sort_inds = torch.argsort(cate_scores, descending=True)   # [7, 5, 8, ...] 降序。最大值的下标，第2大值的下标，...
-        if len(sort_inds) > cfg.nms_pre:    # 最多cfg.nms_pre个。
+        sort_inds = torch.argsort(cate_scores, descending=True)
+        if len(sort_inds) > cfg.nms_pre:
             sort_inds = sort_inds[:cfg.nms_pre]
-        seg_masks_soft = seg_masks_soft[sort_inds, :, :]   # 按照分数降序
-        seg_masks = seg_masks[sort_inds, :, :]             # 按照分数降序
+        seg_masks_soft = seg_masks_soft[sort_inds, :, :]
+        seg_masks = seg_masks[sort_inds, :, :]
         cate_scores = cate_scores[sort_inds]
         sum_masks = sum_masks[sort_inds]
         cate_labels = cate_labels[sort_inds]
@@ -532,10 +515,6 @@ class DecoupledSOLOHead(nn.Module):
         cate_scores = cate_scores[sort_inds]
         cate_labels = cate_labels[sort_inds]
 
-
-        h, w, _ = img_shape
-        upsampled_size_out = (featmap_size[0] * 4, featmap_size[1] * 4)   # (s4*4, s4*4)
-
         seg_masks_soft = F.interpolate(seg_masks_soft.unsqueeze(0),
                                     size=upsampled_size_out,
                                     mode='bilinear')[:, :, :h, :w]
@@ -544,140 +523,3 @@ class DecoupledSOLOHead(nn.Module):
                                mode='bilinear').squeeze(0)
         seg_masks = seg_masks > cfg.mask_thr
         return seg_masks, cate_labels, cate_scores
-
-
-
-import numpy as np
-
-
-# ins_label_list       里有形状为[?1, 104, 104]、[?2, 104, 104]、[?3, 52, 52]、...的5个数组。是不支持拼接的。其他list同理。
-# cate_label_list      里有形状为[40, 40]、[36, 36]、[24, 24]、...的5个数组。
-# ins_ind_label_list   里有形状为[?1, ]、[?2, ]、[?3, ]、...的5个数组。全是1。
-# ins_ind_label_list_xy里有形状为[?1, 2]、[?2, 2]、[?3, 2]、...的5个数组。[?1, 2]表示正样本在cate_label_list[0]里的下标。
-
-
-# ins_label_list = 0
-# cate_label_list = 0
-# ins_ind_label_list = 0
-# ins_ind_label_list_xy = 0
-
-
-# ins_label_list = [[np.zeros((1, 104, 104)), np.zeros((3, 104, 104))],
-#                   [np.zeros((4, 104, 104)), np.zeros((1, 104, 104))],
-#                   [np.zeros((1, 52, 52)), np.zeros((1, 52, 52))],
-#                   [np.zeros((8, 26, 26)), np.zeros((1, 26, 26))],
-#                   [np.zeros((1, 26, 26)), np.zeros((17, 26, 26))]]
-# ins_ind_label_list = [[np.zeros((1, )), np.zeros((3, ))],
-#                       [np.zeros((4, )), np.zeros((1, ))],
-#                       [np.zeros((1, )), np.zeros((1, ))],
-#                       [np.zeros((8, )), np.zeros((1, ))],
-#                       [np.zeros((1, )), np.zeros((17, ))]]
-
-ins_label_list = [[torch.Tensor(np.zeros((1, 104, 104))),
-                   torch.Tensor(np.zeros((1, 104, 104))),
-                   torch.Tensor(np.zeros((1, 52, 52))),
-                   torch.Tensor(np.zeros((1, 26, 26))),
-                   torch.Tensor(np.zeros((1, 26, 26)))],
-                  [torch.Tensor(np.zeros((1, 104, 104))),
-                   torch.Tensor(np.zeros((1, 104, 104))),
-                   torch.Tensor(np.zeros((1, 52, 52))),
-                   torch.Tensor(np.zeros((1, 26, 26))),
-                   torch.Tensor(np.zeros((1, 26, 26)))]
-                  ]
-# ins_ind_label_list = [[torch.Tensor(np.ones((1, )), 'bool'),
-#                        torch.Tensor(np.ones((1, )), 'bool'),
-#                        torch.Tensor(np.ones((1, )), 'bool'),
-#                        torch.Tensor(np.ones((1, )), 'bool'),
-#                        torch.Tensor(np.ones((1, )), 'bool')],
-#                       [torch.Tensor(np.ones((1, )), 'bool'),
-#                        torch.Tensor(np.ones((1, )), 'bool'),
-#                        torch.Tensor(np.ones((1, )), 'bool'),
-#                        torch.Tensor(np.ones((1, )), 'bool'),
-#                        torch.Tensor(np.ones((1, )), 'bool')],
-#                       ]
-
-ins_ind_label_list = [[torch.Tensor(np.ones((1, ), np.bool)),
-                       torch.Tensor(np.ones((1, ), np.bool)),
-                       torch.Tensor(np.ones((1, ), np.bool)),
-                       torch.Tensor(np.ones((1, ), np.bool)),
-                       torch.Tensor(np.ones((1, ), np.bool))],
-                      [torch.Tensor(np.ones((1, ), np.bool)),
-                       torch.Tensor(np.ones((1, ), np.bool)),
-                       torch.Tensor(np.ones((1, ), np.bool)),
-                       torch.Tensor(np.ones((1, ), np.bool)),
-                       torch.Tensor(np.ones((1, ), np.bool))]
-                      ]
-
-
-for ins_labels_level, ins_ind_labels_level in zip(zip(*ins_label_list), zip(*ins_ind_label_list)):
-    print()
-    aaa = []
-    # for ins_labels_level_img, ins_ind_labels_level_img in zip(ins_labels_level, ins_ind_labels_level):
-    #     xx = ins_labels_level_img[ins_ind_labels_level_img, ...]
-    #     aaa.append(xx)
-    #     print()
-    for a1, a2 in zip(ins_labels_level, ins_ind_labels_level):
-        xx = a1[a2, ...]
-        aaa.append(xx)
-        print()
-
-
-print()
-
-# ins
-ins_labels = [np.concatenate([ins_labels_level_img[ins_ind_labels_level_img, ...]
-                         for ins_labels_level_img, ins_ind_labels_level_img in
-                         zip(ins_labels_level, ins_ind_labels_level)], 0)
-              for ins_labels_level, ins_ind_labels_level in zip(zip(*ins_label_list), zip(*ins_ind_label_list))]
-
-print()
-
-
-
-dic2 = np.load('data.npz')
-seg_pred_list_x = dic2['seg_pred_list_x']
-seg_pred_list_y = dic2['seg_pred_list_y']
-cate_pred_list = dic2['cate_pred_list']
-
-cate_pred_list = torch.from_numpy(cate_pred_list)
-seg_pred_list_x = torch.from_numpy(seg_pred_list_x)
-seg_pred_list_y = torch.from_numpy(seg_pred_list_y)
-
-featmap_size = [200, 304]
-img_shape = [800, 1216, 3]
-ori_shape = [427, 640]
-scale_factor = 800/427
-cfg = None
-rescale = False
-
-
-class TrainConfig(object):
-    """
-    train.py里需要的配置
-    """
-    def __init__(self):
-        self.nms_pre = 500
-        self.score_thr = 0.1
-        # self.mask_thr = 0.5
-        self.mask_thr = 0.005
-        self.update_thr = 0.001
-        self.kernel = 'gaussian'
-        self.sigma = 2.0
-        self.max_per_img = 100
-
-cfg = TrainConfig()
-
-aaa = DecoupledSOLOHead(81, 256,
-        stacked_convs=7,
-        seg_feat_channels=256,
-        strides=[8, 8, 16, 32, 32],
-        scale_ranges=((1, 96), (48, 192), (96, 384), (192, 768), (384, 2048)),
-        sigma=0.2,
-        num_grids=[40, 36, 24, 16, 12],
-        cate_down_pos=0,
-        with_deform=False)
-aa = aaa.get_seg_single(cate_pred_list, seg_pred_list_x, seg_pred_list_y,
-                                         featmap_size, img_shape, ori_shape, scale_factor, cfg, rescale)
-
-
-
