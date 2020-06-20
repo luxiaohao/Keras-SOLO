@@ -571,7 +571,7 @@ class RandomShape(BaseOperator):
         random_inter (bool): whether to randomly interpolation, defalut true.
     """
 
-    def __init__(self, sizes=[(1333, 800), (1333, 768), (1333, 736), (1333, 704), (1333, 672), (1333, 640)],
+    def __init__(self, sizes=[(800, 800), (768, 768), (736, 736), (704, 704), (672, 672), (640, 640)],
                  random_inter=True, keep_ratio=True):
         super(RandomShape, self).__init__()
         self.sizes = sizes
