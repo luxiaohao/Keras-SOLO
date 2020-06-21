@@ -294,10 +294,10 @@ if __name__ == '__main__':
     # 这里和原作稍有不同，按照size_divisor=None处理，即统一填充到被选中的分辨率(w, h)。在考虑后面改为跟随原作。
     randomShape = RandomShape()     # pytorch版把掩码的注解放到cpu内存里('DefaultFormatBundle')。想个法子也弄一下。
     normalizeImage = NormalizeImage(is_scale=False, is_channel_first=False)  # 图片归一化。
-    # gt2SoloTarget = Gt2SoloTarget(cfg.anchors,
-    #                               cfg.anchor_masks,
-    #                               cfg.downsample_ratios,
-    #                               num_classes)             # 填写target0、target1、target2张量。
+    gt2SoloTarget = Gt2SoloTarget(cfg.anchors,
+                                  cfg.anchor_masks,
+                                  cfg.downsample_ratios,
+                                  num_classes)             # 填写target0、target1、target2张量。
 
     # 保存模型的目录
     if not os.path.exists('./weights'): os.mkdir('./weights')
