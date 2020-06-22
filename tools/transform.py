@@ -11,6 +11,7 @@
 import cv2
 import uuid
 import numpy as np
+from scipy import ndimage
 
 try:
     from collections.abc import Sequence
@@ -607,6 +608,8 @@ class RandomShape(BaseOperator):
             # 掩码也跟随着插值成图片大小
             # 不能随机插值方法，有的方法不适合50个通道。
             gt_mask = cv2.resize(gt_mask, (im.shape[1], im.shape[0]), interpolation=cv2.INTER_LINEAR)
+            if len(gt_mask.shape) == 2:   # 只有一个通道时，会变成二维数组
+                gt_mask = gt_mask[:, :, np.newaxis]
             gt_mask = (gt_mask > 0.5).astype(np.float32)
 
             # 方框也要变
@@ -721,127 +724,185 @@ class Gt2SoloTarget(BaseOperator):
     """
 
     def __init__(self,
-                 anchors,
-                 anchor_masks,
-                 downsample_ratios,
                  num_classes=80,
-                 iou_thresh=1.):
+                 in_channels=256,
+                 seg_feat_channels=256,
+                 stacked_convs=7,
+                 strides=[8, 8, 16, 32, 32],
+                 base_edge_list=(16, 32, 64, 128, 256),
+                 scale_ranges=((1, 96), (48, 192), (96, 384), (192, 768), (384, 2048)),
+                 sigma=0.2,
+                 num_grids=[40, 36, 24, 16, 12],
+                 cate_down_pos=0,
+                 with_deform=False):
         super(Gt2SoloTarget, self).__init__()
-        self.anchors = anchors
-        self.anchor_masks = anchor_masks
-        self.downsample_ratios = downsample_ratios
         self.num_classes = num_classes
-        self.iou_thresh = iou_thresh
+        self.seg_num_grids = num_grids
+        self.in_channels = in_channels
+        self.seg_feat_channels = seg_feat_channels
+        self.stacked_convs = stacked_convs
+        self.strides = strides
+        self.sigma = sigma
+        self.cate_down_pos = cate_down_pos
+        self.base_edge_list = base_edge_list
+        self.scale_ranges = scale_ranges
+        self.with_deform = with_deform
+        self.max_pos = 600
 
     def __call__(self, samples, context=None):
-        assert len(self.anchor_masks) == len(self.downsample_ratios), \
-            "anchor_masks', and 'downsample_ratios' should have same length."
-
         h, w = samples[0]['image'].shape[:2]
-        an_hw = np.array(self.anchors) / np.array([[w, h]])
-
+        featmap_sizes = []
+        for st in self.strides:
+            featmap_sizes.append([h*2//st, w*2//st])
 
         batch_size = len(samples)
         batch_image = np.zeros((batch_size, h, w, 3))
-        # 准备标记
-        batch_label_sbbox = np.zeros((batch_size, int(h / self.downsample_ratios[2]), int(w / self.downsample_ratios[2]),
-                                      len(self.anchor_masks[0]), 5 + self.num_classes))
-        batch_label_mbbox = np.zeros((batch_size, int(h / self.downsample_ratios[1]), int(w / self.downsample_ratios[1]),
-                                      len(self.anchor_masks[0]), 5 + self.num_classes))
-        batch_label_lbbox = np.zeros((batch_size, int(h / self.downsample_ratios[0]), int(w / self.downsample_ratios[0]),
-                                      len(self.anchor_masks[0]), 5 + self.num_classes))
-        batch_gt_bbox = np.zeros((batch_size, samples[0]['gt_bbox'].shape[0], 4))
-        batch_label = [batch_label_lbbox, batch_label_mbbox, batch_label_sbbox]
+        batch_gt_objs, batch_gt_clss, batch_gt_masks, batch_gt_pos_idx = [], [], [], []
+        for i in range(batch_size):
+            im = samples[i]['image']
+            gt_bbox = samples[i]['gt_bbox']
+            gt_class = samples[i]['gt_class']
+            gt_mask = samples[i]['gt_mask']
+            gt_mask = gt_mask.transpose(2, 0, 1)
+            gt_objs_per_layer, gt_clss_per_layer, gt_masks_per_layer, gt_pos_idx_per_layer = self.solo_target_single(
+                gt_bbox, gt_class, gt_mask, featmap_sizes)
+            batch_gt_objs.append(gt_objs_per_layer)
+            batch_gt_clss.append(gt_clss_per_layer)
+            batch_gt_masks.append(gt_masks_per_layer)
+            batch_gt_pos_idx.append(gt_pos_idx_per_layer)
+            batch_image[i, :, :, :] = im
 
-        p = 0
-        for sample in samples:
-            # im, gt_bbox, gt_class, gt_score = sample
-            im = sample['image']
-            gt_bbox = sample['gt_bbox']
-            gt_class = sample['gt_class']
-            gt_score = sample['gt_score']
-            for i, (
-                    mask, downsample_ratio
-            ) in enumerate(zip(self.anchor_masks, self.downsample_ratios)):
-                grid_h = int(h / downsample_ratio)
-                grid_w = int(w / downsample_ratio)
-                target = np.zeros(
-                    (grid_h, grid_w, len(mask), 5 + self.num_classes),
-                    dtype=np.float32)
-                for b in range(gt_bbox.shape[0]):
-                    gx, gy, gw, gh = gt_bbox[b, :]
-                    cls = gt_class[b]
-                    score = gt_score[b]
-                    if gw <= 0. or gh <= 0. or score <= 0.:
-                        continue
+        num_layers = len(batch_gt_objs[0])
+        batch_gt_objs_tensors = []
+        batch_gt_clss_tensors = []
+        batch_gt_masks_tensors = []
+        batch_gt_pos_idx_tensors = []
+        for lid in range(num_layers):
+            list_1 = []
+            list_2 = []
+            list_3 = []
+            list_4 = []
+            max_mask = -1
+            for bid in range(batch_size):
+                gt_objs = batch_gt_objs[bid][lid]
+                gt_clss = batch_gt_clss[bid][lid]
+                gt_masks = batch_gt_masks[bid][lid]
+                gt_pos_idx = batch_gt_pos_idx[bid][lid]
 
-                    # find best match anchor index
-                    best_iou = 0.
-                    best_idx = -1
-                    for an_idx in range(an_hw.shape[0]):
-                        iou = jaccard_overlap(
-                            [0., 0., gw, gh],
-                            [0., 0., an_hw[an_idx, 0], an_hw[an_idx, 1]])
-                        if iou > best_iou:
-                            best_iou = iou
-                            best_idx = an_idx
+                list_1.append(gt_objs[np.newaxis, :, :, :])
+                list_2.append(gt_clss[np.newaxis, :, :, :])
+                list_3.append(gt_masks)
+                nnn = gt_masks.shape[0]
+                if nnn > max_mask:
+                    max_mask = nnn
+                list_4.append(gt_pos_idx[np.newaxis, :, :])
+            list_1 = np.concatenate(list_1, 0)
+            list_2 = np.concatenate(list_2, 0)
+            temp = np.zeros((batch_size, max_mask, list_3[0].shape[1], list_3[0].shape[2]), np.uint8)
+            for bid in range(batch_size):
+                gt_masks = list_3[bid]
+                nnn = gt_masks.shape[0]
+                temp[bid, :nnn, :, :] = gt_masks
+            list_4 = np.concatenate(list_4, 0)
+            batch_gt_objs_tensors.append(list_1)
+            batch_gt_clss_tensors.append(list_2)
+            batch_gt_masks_tensors.append(temp)
+            batch_gt_pos_idx_tensors.append(list_4)
+        return batch_image, batch_gt_objs_tensors, batch_gt_clss_tensors, batch_gt_masks_tensors, batch_gt_pos_idx_tensors
 
-                    gi = int(gx * grid_w)
-                    gj = int(gy * grid_h)
+    def solo_target_single(self,
+                           gt_bboxes_raw,
+                           gt_labels_raw,
+                           gt_masks_raw,
+                           featmap_sizes=None):
+        # ins
+        gt_areas = np.sqrt((gt_bboxes_raw[:, 2] - gt_bboxes_raw[:, 0]) * (   # 平均边长，几何平均数， [n, ]
+                gt_bboxes_raw[:, 3] - gt_bboxes_raw[:, 1]))
 
-                    # gtbox should be regresed in this layes if best match
-                    # anchor index in anchor mask of this layer
-                    if best_idx in mask:
-                        best_n = mask.index(best_idx)
+        gt_objs_per_layer = []
+        gt_clss_per_layer = []
+        gt_masks_per_layer = []
+        gt_pos_idx_per_layer = []
+        # 遍历每个输出层
+        #           (1,     96)            8     [104, 104]     40
+        for (lower_bound, upper_bound), stride, featmap_size, num_grid \
+                in zip(self.scale_ranges, self.strides, featmap_sizes, self.seg_num_grids):
+            # [40, 40, 1]  objectness
+            gt_objs = np.zeros([num_grid, num_grid, 1], dtype=np.float32)
+            # [40, 40, 80]  种类one-hot
+            gt_clss = np.zeros([num_grid, num_grid, self.num_classes], dtype=np.float32)
+            # [?, 104, 104]  这一输出层的gt_masks，可能同一个掩码重复多次
+            gt_masks = []
+            # [self.max_pos, 3]    坐标以-2初始化
+            # 前2个用于把正样本抽出来gather_nd()，后1个用于把掩码抽出来gather()。为了避免使用layers.where()后顺序没对上，所以不拆开写。
+            gt_pos_idx = np.zeros([self.max_pos, 3], dtype=np.int32) - 2
+            # 掩码计数
+            p = 0
 
-                        # x, y, w, h, scale
-                        target[gj, gi, best_n, 0] = gx * w
-                        target[gj, gi, best_n, 1] = gy * h
-                        target[gj, gi, best_n, 2] = gw * w
-                        target[gj, gi, best_n, 3] = gh * h
+            # 这一张图片，所有物体，若平均边长在这个范围，这一输出层就负责预测。因为面积范围有交集，所以一个gt可以被分配到多个输出层上。
+            hit_indices = np.where((gt_areas >= lower_bound) & (gt_areas <= upper_bound))[0]
 
-                        # objectness record gt_score
-                        target[gj, gi, best_n, 4] = score
+            if len(hit_indices) == 0:   # 这一层没有正样本
+                gt_objs_per_layer.append(gt_objs)   # 全是0
+                gt_clss_per_layer.append(gt_clss)   # 全是0
+                gt_masks = np.zeros([1, featmap_size[0], featmap_size[1]], dtype=np.uint8)   # 全是0，至少一张掩码，方便gather()
+                gt_masks_per_layer.append(gt_masks)
+                gt_pos_idx[0, :] = np.array([0, 0, 0], dtype=np.int32)   # 没有正样本，默认会抽第0行第0列格子，默认会抽这一层gt_mask里第0个掩码。
+                gt_pos_idx_per_layer.append(gt_pos_idx)
+                continue
+            gt_bboxes_raw_this_layer = gt_bboxes_raw[hit_indices]   # shape=[m, 4]  这一层负责预测的物体的bbox
+            gt_labels_raw_this_layer = gt_labels_raw[hit_indices]   # shape=[m, ]   这一层负责预测的物体的类别id
+            gt_masks_raw_this_layer = gt_masks_raw[hit_indices]   # [m, ?, ?]
 
-                        # classification
-                        onehot = np.zeros(self.num_classes, dtype=np.float)
-                        onehot[cls] = 1.0
-                        uniform_distribution = np.full(self.num_classes, 1.0 / self.num_classes)
-                        deta = 0.01
-                        smooth_onehot = onehot * (1 - deta) + deta * uniform_distribution
-                        target[gj, gi, best_n, 5:] = smooth_onehot
+            half_ws = 0.5 * (gt_bboxes_raw_this_layer[:, 2] - gt_bboxes_raw_this_layer[:, 0]) * self.sigma   # shape=[m, ]  宽的一半
+            half_hs = 0.5 * (gt_bboxes_raw_this_layer[:, 3] - gt_bboxes_raw_this_layer[:, 1]) * self.sigma   # shape=[m, ]  高的一半
 
-                    # For non-matched anchors, calculate the target if the iou
-                    # between anchor and gt is larger than iou_thresh
-                    if self.iou_thresh < 1:
-                        for idx, mask_i in enumerate(mask):
-                            if mask_i == best_idx: continue
-                            iou = jaccard_overlap(
-                                [0., 0., gw, gh],
-                                [0., 0., an_hw[mask_i, 0], an_hw[mask_i, 1]])
-                            if iou > self.iou_thresh:
-                                # x, y, w, h, scale
-                                target[gj, gi, idx, 0] = gx * w
-                                target[gj, gi, idx, 1] = gy * h
-                                target[gj, gi, idx, 2] = gw * w
-                                target[gj, gi, idx, 3] = gh * h
+            output_stride = stride / 2   # 因为网络最后对ins_feat_x、ins_feat_y进行上采样，所以stride / 2
 
-                                # objectness record gt_score
-                                target[gj, gi, idx, 4] = score
+            for seg_mask, gt_label, half_h, half_w in zip(gt_masks_raw_this_layer, gt_labels_raw_this_layer, half_hs, half_ws):
+                if seg_mask.sum() < 10:   # 忽略太小的物体
+                   continue
+                # mass center
+                upsampled_size = (featmap_sizes[0][0] * 4, featmap_sizes[0][1] * 4)   # 也就是输入图片的大小
+                center_h, center_w = ndimage.measurements.center_of_mass(seg_mask)    # 求物体掩码的质心。scipy提供技术支持。
+                coord_w = int((center_w / upsampled_size[1]) // (1. / num_grid))      # 物体质心落在了第几列格子
+                coord_h = int((center_h / upsampled_size[0]) // (1. / num_grid))      # 物体质心落在了第几行格子
 
-                                # classification
-                                onehot = np.zeros(self.num_classes, dtype=np.float)
-                                onehot[cls] = 1.0
-                                uniform_distribution = np.full(self.num_classes, 1.0 / self.num_classes)
-                                deta = 0.01
-                                smooth_onehot = onehot * (1 - deta) + deta * uniform_distribution
-                                target[gj, gi, idx, 5:] = smooth_onehot
-                # sample['target{}'.format(i)] = target
-                batch_label[i][p, :, :, :, :] = target
-                batch_gt_bbox[p, :, :] = gt_bbox * [w, h, w, h]
-            batch_image[p, :, :, :] = im
-            p += 1
-        return batch_image, batch_label, batch_gt_bbox
+                # left, top, right, down
+                top_box = max(0, int(((center_h - half_h) / upsampled_size[0]) // (1. / num_grid)))      # 物体左上角落在了第几行格子
+                down_box = min(num_grid - 1, int(((center_h + half_h) / upsampled_size[0]) // (1. / num_grid)))    # 物体右下角落在了第几行格子
+                left_box = max(0, int(((center_w - half_w) / upsampled_size[1]) // (1. / num_grid)))     # 物体左上角落在了第几列格子
+                right_box = min(num_grid - 1, int(((center_w + half_w) / upsampled_size[1]) // (1. / num_grid)))   # 物体右下角落在了第几列格子
+
+                # 物体的宽高并没有那么重要。将物体的左上角、右下角限制在质心所在的九宫格内。当物体很小时，物体的左上角、右下角、质心位于同一个格子。
+                top = max(top_box, coord_h-1)
+                down = min(down_box, coord_h+1)
+                # down = top
+                left = max(coord_w-1, left_box)
+                right = min(right_box, coord_w+1)
+                # right = left
+
+                # 40x40的网格，将负责预测gt的格子填上gt_objs和gt_clss，此处同YOLOv3
+                # ins  [img_h, img_w]->[img_h/output_stride, img_w/output_stride]  将gt的掩码下采样output_stride倍。
+                seg_mask = cv2.resize(seg_mask, None, None, fx=1. / output_stride, fy=1. / output_stride, interpolation=cv2.INTER_LINEAR)
+                # seg_mask = mmcv.imrescale(seg_mask, scale=1. / output_stride)
+                for i in range(top, down+1):
+                    for j in range(left, right+1):
+                        if gt_objs[i, j, 0] < 0.5:   # 这个格子没有被填过gt才可以填。
+                            gt_objs[i, j, 0] = 1.0   # 此处同YOLOv3
+                            gt_clss[i, j, gt_label] = 1.0   # 此处同YOLOv3
+                            cp_mask = np.copy(seg_mask)
+                            cp_mask = cp_mask[np.newaxis, :, :]
+                            gt_masks.append(cp_mask)
+                            gt_pos_idx[p, :] = np.array([i, j, p], dtype=np.int32)   # 前2个用于把正样本抽出来gather_nd()，后1个用于把掩码抽出来gather()。
+                            p += 1
+            gt_masks = np.concatenate(gt_masks, axis=0)
+
+            gt_objs_per_layer.append(gt_objs)
+            gt_clss_per_layer.append(gt_clss)
+            gt_masks_per_layer.append(gt_masks)
+            gt_pos_idx_per_layer.append(gt_pos_idx)
+        return gt_objs_per_layer, gt_clss_per_layer, gt_masks_per_layer, gt_pos_idx_per_layer
 
 
 

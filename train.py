@@ -25,6 +25,9 @@ import tensorflow as tf
 from keras import backend as K
 
 from config import TrainConfig
+from model.head import DecoupledSOLOHead
+from model.neck import FPN
+from model.resnet import Resnet
 from model.solo import SOLO
 from tools.cocotools import get_classes, catid2clsid, clsid2catid
 from tools.cocotools import eval
@@ -214,43 +217,212 @@ def decode(conv_output, anchors, stride, num_class):
     pred_prob = tf.sigmoid(conv_raw_prob)
     return tf.concat([pred_xywh, pred_conf, pred_prob], axis=-1)
 
-def yolo_loss(args, num_classes, iou_loss_thresh, anchors):
-    conv_lbbox = args[0]   # (?, ?, ?, 3*(num_classes+5))
-    conv_mbbox = args[1]   # (?, ?, ?, 3*(num_classes+5))
-    conv_sbbox = args[2]   # (?, ?, ?, 3*(num_classes+5))
-    label_sbbox = args[3]   # (?, ?, ?, 3, num_classes+5)
-    label_mbbox = args[4]   # (?, ?, ?, 3, num_classes+5)
-    label_lbbox = args[5]   # (?, ?, ?, 3, num_classes+5)
-    true_bboxes = args[6]   # (?, 50, 4)
-    pred_sbbox = decode(conv_sbbox, anchors[0], 8, num_classes)
-    pred_mbbox = decode(conv_mbbox, anchors[1], 16, num_classes)
-    pred_lbbox = decode(conv_lbbox, anchors[2], 32, num_classes)
-    sbbox_ciou_loss, sbbox_conf_loss, sbbox_prob_loss = loss_layer(conv_sbbox, pred_sbbox, label_sbbox, true_bboxes, 8, num_classes, iou_loss_thresh)
-    mbbox_ciou_loss, mbbox_conf_loss, mbbox_prob_loss = loss_layer(conv_mbbox, pred_mbbox, label_mbbox, true_bboxes, 16, num_classes, iou_loss_thresh)
-    lbbox_ciou_loss, lbbox_conf_loss, lbbox_prob_loss = loss_layer(conv_lbbox, pred_lbbox, label_lbbox, true_bboxes, 32, num_classes, iou_loss_thresh)
+# def solo_loss2(args, batch_size, num_layers):
+#     oouput_x = []
+#     for i in range(num_layers):
+#         oouput_x.append(args[i])
+#     label_sbbox = args[3]   # (?, ?, ?, 3, num_classes+5)
+#     label_mbbox = args[4]   # (?, ?, ?, 3, num_classes+5)
+#     label_lbbox = args[5]   # (?, ?, ?, 3, num_classes+5)
+#     true_bboxes = args[6]   # (?, 50, 4)
+#     pred_sbbox = decode(conv_sbbox, anchors[0], 8, num_classes)
+#     pred_mbbox = decode(conv_mbbox, anchors[1], 16, num_classes)
+#     pred_lbbox = decode(conv_lbbox, anchors[2], 32, num_classes)
+#     sbbox_ciou_loss, sbbox_conf_loss, sbbox_prob_loss = loss_layer(conv_sbbox, pred_sbbox, label_sbbox, true_bboxes, 8, num_classes, iou_loss_thresh)
+#     mbbox_ciou_loss, mbbox_conf_loss, mbbox_prob_loss = loss_layer(conv_mbbox, pred_mbbox, label_mbbox, true_bboxes, 16, num_classes, iou_loss_thresh)
+#     lbbox_ciou_loss, lbbox_conf_loss, lbbox_prob_loss = loss_layer(conv_lbbox, pred_lbbox, label_lbbox, true_bboxes, 32, num_classes, iou_loss_thresh)
+#
+#     ciou_loss = sbbox_ciou_loss + mbbox_ciou_loss + lbbox_ciou_loss
+#     conf_loss = sbbox_conf_loss + mbbox_conf_loss + lbbox_conf_loss
+#     prob_loss = sbbox_prob_loss + mbbox_prob_loss + lbbox_prob_loss
+#     return [ciou_loss, conf_loss, prob_loss]
 
-    ciou_loss = sbbox_ciou_loss + mbbox_ciou_loss + lbbox_ciou_loss
-    conf_loss = sbbox_conf_loss + mbbox_conf_loss + lbbox_conf_loss
-    prob_loss = sbbox_prob_loss + mbbox_prob_loss + lbbox_prob_loss
-    return [ciou_loss, conf_loss, prob_loss]
+
+
+def dice_loss(pred_mask, gt_mask, gt_obj):
+    a = tf.reduce_sum(pred_mask * gt_mask, axis=[1, 2])
+    b = tf.reduce_sum(pred_mask * pred_mask, axis=[1, 2]) + 0.001
+    c = tf.reduce_sum(gt_mask * gt_mask, axis=[1, 2]) + 0.001
+    d = (2 * a) / (b + c)
+    loss_mask_mask = tf.reshape(gt_obj, (-1, ))   # 掩码损失的掩码。
+    return (1-d) * loss_mask_mask
+
+
+def solo_loss(args, batch_size, num_layers):
+    p = 0
+
+    ins_pred_x_list = []
+    for i in range(num_layers):
+        ins_pred_x_list.append(args[p])   # 从小感受野 到 大感受野 （从多格子 到 少格子）
+        p += 1
+
+    ins_pred_y_list = []
+    for i in range(num_layers):
+        ins_pred_y_list.append(args[p])   # 从小感受野 到 大感受野 （从多格子 到 少格子）
+        p += 1
+
+    cate_pred_list = []
+    for i in range(num_layers):
+        cate_pred_list.append(args[p])    # 从小感受野 到 大感受野 （从多格子 到 少格子）
+        p += 1
+
+    batch_gt_objs_tensors = []
+    for i in range(num_layers):
+        batch_gt_objs_tensors.append(args[p])
+        p += 1
+
+    batch_gt_clss_tensors = []
+    for i in range(num_layers):
+        batch_gt_clss_tensors.append(args[p])
+        p += 1
+
+    batch_gt_masks_tensors = []
+    for i in range(num_layers):
+        batch_gt_masks_tensors.append(args[p])
+        p += 1
+
+    batch_gt_pos_idx_tensors = []
+    for i in range(num_layers):
+        batch_gt_pos_idx_tensors.append(args[p])
+        p += 1
+
+
+    # ================= 计算损失 =================
+    num_ins = 0.  # 记录这一批图片的正样本个数
+    loss_clss, loss_masks = [], []
+    for bid in range(batch_size):
+        for lid in range(num_layers):
+            # ================ 掩码损失 ======================
+            pred_mask_x = ins_pred_x_list[lid][bid]
+            pred_mask_y = ins_pred_y_list[lid][bid]
+            pred_mask_x = tf.transpose(pred_mask_x, perm=[2, 0, 1])
+            pred_mask_y = tf.transpose(pred_mask_y, perm=[2, 0, 1])
+
+            gt_objs = batch_gt_objs_tensors[lid][bid]
+            gt_masks = batch_gt_masks_tensors[lid][bid]
+            pmidx = batch_gt_pos_idx_tensors[lid][bid]
+
+            idx_sum = tf.reduce_sum(pmidx, axis=1)
+            keep = tf.where(idx_sum > -1)
+            keep = tf.reshape(keep, (-1, ))
+            pmidx = tf.gather(pmidx, keep)
+
+            yx_idx = pmidx[:, :2]
+            y_idx = pmidx[:, 0]
+            x_idx = pmidx[:, 1]
+            m_idx = pmidx[:, 2]
+
+            # 抽出来
+            gt_obj = tf.gather_nd(gt_objs, yx_idx)
+            mask_y = tf.gather(pred_mask_y, y_idx)
+            mask_x = tf.gather(pred_mask_x, x_idx)
+            gt_mask = tf.gather(gt_masks, m_idx)
+
+            # 正样本数量
+            num_ins += tf.reduce_sum(gt_obj)
+
+            pred_mask = tf.sigmoid(mask_x) * tf.sigmoid(mask_y)
+            loss_mask = dice_loss(pred_mask, gt_mask, gt_obj)
+            loss_masks.append(loss_mask)
+
+
+            # ================ 分类损失 ======================
+            gamma = 2.0
+            alpha = 0.25
+            pred_conf = cate_pred_list[lid][bid]
+            pred_conf = tf.sigmoid(pred_conf)
+            gt_clss = batch_gt_clss_tensors[lid][bid]
+            pos_loss = gt_clss * (0 - tf.log(pred_conf + 1e-9)) * tf.pow(1 - pred_conf, gamma) * alpha
+            neg_loss = (1 - gt_clss) * (0 - tf.log(1 - pred_conf + 1e-9)) * tf.pow(pred_conf, gamma) * (1 - alpha)
+            clss_loss = pos_loss + neg_loss
+            clss_loss = tf.reduce_sum(clss_loss, axis=[0, 1])
+            loss_clss.append(clss_loss)
+    loss_masks = tf.concat(loss_masks, axis=0)
+    ins_loss_weight = 3.0
+    loss_masks = tf.reduce_sum(loss_masks) * ins_loss_weight
+    loss_masks = loss_masks / (num_ins + 1e-9)   # 损失同原版SOLO，之所以不直接用tf.reduce_mean()，是因为多了一些0损失占位，分母并不等于num_ins。
+
+    loss_clss = tf.concat(loss_clss, axis=0)
+    clss_loss_weight = 1.0
+    loss_clss = tf.reduce_sum(loss_clss) * clss_loss_weight
+    loss_clss = loss_clss / (num_ins + 1e-9)
+
+    return [loss_masks, loss_clss]
 
 
 def multi_thread_op(i, samples, decodeImage, context, train_dataset, with_mixup, mixupImage,
-                     photometricDistort, randomCrop, randomFlipImage, padBox):
+                     photometricDistort, randomCrop, randomFlipImage):
     samples[i] = decodeImage(samples[i], context, train_dataset)
     if with_mixup:
         samples[i] = mixupImage(samples[i], context)
     samples[i] = photometricDistort(samples[i], context)
     samples[i] = randomCrop(samples[i], context)
     samples[i] = randomFlipImage(samples[i], context)
-    samples[i] = padBox(samples[i], context)
 
 if __name__ == '__main__':
-    iter_id = 0
     cfg = TrainConfig()
 
     class_names = get_classes(cfg.classes_path)
     num_classes = len(class_names)
+    batch_size = cfg.batch_size
+    num_layers = 5
+
+    # 步id，无需设置，会自动读。
+    iter_id = 0
+
+    # 多尺度训练
+    inputs = layers.Input(shape=(None, None, 3))
+    # inputs = layers.Input(shape=(416, 416, 3))
+    resnet = Resnet(50)
+    fpn = FPN(in_channels=[256, 512, 1024, 2048], out_channels=256, num_outs=5)
+    head = DecoupledSOLOHead()
+    solo = SOLO(resnet, fpn, head)
+    outs = solo(inputs, eval=False)
+    model_body = keras.models.Model(inputs=inputs, outputs=outs)
+
+
+    # 模式。 0-从头训练，1-读取之前的模型继续训练（model_path可以是'solo.h5'、'./weights/step00001000.h5'这些。）
+    pattern = cfg.pattern
+    if pattern == 1:
+        model_body.load_weights(cfg.model_path, by_name=True, skip_mismatch=True)
+        strs = cfg.model_path.split('step')
+        if len(strs) == 2:
+            iter_id = int(strs[1][:8])
+
+        # 冻结，使得需要的显存减少。6G的卡建议这样配置。11G的卡建议不冻结。
+        # freeze_before = 'conv2d_60'
+        # freeze_before = 'conv2d_72'
+        freeze_before = 'conv2d_86'
+        for i in range(len(model_body.layers)):
+            ly = model_body.layers[i]
+            if ly.name == freeze_before:
+                break
+            else:
+                ly.trainable = False
+    elif pattern == 0:
+        pass
+
+    # 标记张量
+    batch_gt_objs_tensors = []
+    batch_gt_clss_tensors = []
+    batch_gt_masks_tensors = []
+    batch_gt_pos_idx_tensors = []
+    for lid in range(num_layers):
+        sample_layer_gt_objs = layers.Input(name='layer%d_gt_objs' % (lid, ), shape=(None, None, 1), dtype='float32')
+        sample_layer_gt_clss = layers.Input(name='layer%d_gt_clss' % (lid, ), shape=(None, None, None), dtype='float32')
+        sample_layer_gt_masks = layers.Input(name='layer%d_gt_masks' % (lid, ), shape=(None, None, None), dtype='float32')
+        sample_layer_gt_pos_idx = layers.Input(name='layer%d_gt_pos_idx' % (lid, ), shape=(None, 3), dtype='int32')
+        batch_gt_objs_tensors.append(sample_layer_gt_objs)
+        batch_gt_clss_tensors.append(sample_layer_gt_clss)
+        batch_gt_masks_tensors.append(sample_layer_gt_masks)
+        batch_gt_pos_idx_tensors.append(sample_layer_gt_pos_idx)
+
+    loss_list = layers.Lambda(solo_loss, name='solo_loss',
+                           arguments={'batch_size': batch_size, 'num_layers': num_layers
+                                      })([*model_body.output, *batch_gt_objs_tensors, *batch_gt_clss_tensors, *batch_gt_masks_tensors, *batch_gt_pos_idx_tensors])
+    model = keras.models.Model([model_body.input, *batch_gt_objs_tensors, *batch_gt_clss_tensors, *batch_gt_masks_tensors, *batch_gt_pos_idx_tensors], loss_list)
+    model.summary()
+    # keras.utils.vis_utils.plot_model(model_body, to_file='solo.png', show_shapes=True)
 
     # 种类id
     _catid2clsid = copy.deepcopy(catid2clsid)
@@ -274,7 +446,6 @@ if __name__ == '__main__':
             dataset = json.loads(line)
             val_images = dataset['images']
 
-    batch_size = cfg.batch_size
     with_mixup = cfg.with_mixup
     context = cfg.context
     # 预处理
@@ -284,7 +455,6 @@ if __name__ == '__main__':
     photometricDistort = PhotometricDistort()   # 颜色扭曲
     randomCrop = RandomCrop()                   # 随机裁剪
     randomFlipImage = RandomFlipImage()         # 随机翻转
-    padBox = PadBox(cfg.num_max_boxes)          # 如果gt_bboxes的数量少于num_max_boxes，那么填充坐标是0的bboxes以凑够num_max_boxes。
 
     # batch_transforms
     # 6个分辨率(w, h)，随机选一个分辨率(w, h)训练。也随机选一种插值方式。原版SOLO中，因为设定了size_divisor=32，
@@ -294,15 +464,12 @@ if __name__ == '__main__':
     # 这里和原作稍有不同，按照size_divisor=None处理，即统一填充到被选中的分辨率(w, h)。在考虑后面改为跟随原作。
     randomShape = RandomShape()     # pytorch版把掩码的注解放到cpu内存里('DefaultFormatBundle')。想个法子也弄一下。
     normalizeImage = NormalizeImage(is_scale=False, is_channel_first=False)  # 图片归一化。
-    gt2SoloTarget = Gt2SoloTarget(cfg.anchors,
-                                  cfg.anchor_masks,
-                                  cfg.downsample_ratios,
-                                  num_classes)             # 填写target0、target1、target2张量。
+    gt2SoloTarget = Gt2SoloTarget()
 
     # 保存模型的目录
     if not os.path.exists('./weights'): os.mkdir('./weights')
 
-    # model.compile(loss={'yolo_loss': lambda y_true, y_pred: y_pred}, optimizer=keras.optimizers.Adam(lr=cfg.lr))
+    model.compile(loss={'solo_loss': lambda y_true, y_pred: y_pred}, optimizer=keras.optimizers.Adam(lr=cfg.lr))
 
     time_stat = deque(maxlen=20)
     start_time = time.time()
@@ -331,7 +498,7 @@ if __name__ == '__main__':
             threads = []
             for i in range(batch_size):
                 t = threading.Thread(target=multi_thread_op, args=(i, samples, decodeImage, context, train_dataset, with_mixup, mixupImage,
-                                                                   photometricDistort, randomCrop, randomFlipImage, padBox))
+                                                                   photometricDistort, randomCrop, randomFlipImage))
                 threads.append(t)
                 t.start()
             # 等待所有线程任务结束。
@@ -352,21 +519,19 @@ if __name__ == '__main__':
                     if sc > 0:
                         m = gt_mask[:, :, rr]
                         cv2.imwrite('temp/%d_%d.jpg'%(r, rr), m*255)
-            print()
 
             # batch_transforms
             samples = randomShape(samples, context)
             samples = normalizeImage(samples, context)
-            batch_image, batch_label, batch_gt_bbox = gt2SoloTarget(samples, context)
-
-            batch_xs = [batch_image, batch_label[2], batch_label[1], batch_label[0], batch_gt_bbox]
-            y_true = [np.zeros(batch_size), np.zeros(batch_size), np.zeros(batch_size)]
+            batch_image, batch_gt_objs, batch_gt_clss, batch_gt_masks, batch_gt_pos_idx = gt2SoloTarget(samples, context)
+            batch_xs = [batch_image, *batch_gt_objs, *batch_gt_clss, *batch_gt_masks, *batch_gt_pos_idx]
+            y_true = [np.zeros(batch_size), np.zeros(batch_size)]
             losses = model.train_on_batch(batch_xs, y_true)
 
             # ==================== log ====================
             if iter_id % 20 == 0:
-                strs = 'Train iter: {}, all_loss: {:.6f}, ciou_loss: {:.6f}, conf_loss: {:.6f}, prob_loss: {:.6f}, eta: {}'.format(
-                    iter_id, losses[0], losses[1], losses[2], losses[3], eta)
+                strs = 'Train iter: {}, all_loss: {:.6f}, mask_loss: {:.6f}, clss_loss: {:.6f}, eta: {}'.format(
+                    iter_id, losses[0], losses[1], losses[2], eta)
                 logger.info(strs)
 
             # ==================== save ====================
@@ -387,18 +552,18 @@ if __name__ == '__main__':
                 logger.info('Save model to {}'.format(save_path))
 
             # ==================== eval ====================
-            if iter_id % cfg.eval_iter == 0:
-                box_ap = eval(_decode, val_images, cfg.val_pre_path, cfg.val_path, cfg.eval_batch_size, _clsid2catid, cfg.draw_image)
-                logger.info("box ap: %.3f" % (box_ap[0], ))
-
-                # 以box_ap作为标准
-                ap = box_ap
-                if ap[0] > best_ap_list[0]:
-                    best_ap_list[0] = ap[0]
-                    best_ap_list[1] = iter_id
-                    model.save('./weights/best_model.h5')
-                logger.info("Best test ap: {}, in iter: {}".format(
-                    best_ap_list[0], best_ap_list[1]))
+            # if iter_id % cfg.eval_iter == 0:
+            #     box_ap = eval(_decode, val_images, cfg.val_pre_path, cfg.val_path, cfg.eval_batch_size, _clsid2catid, cfg.draw_image)
+            #     logger.info("box ap: %.3f" % (box_ap[0], ))
+            #
+            #     # 以box_ap作为标准
+            #     ap = box_ap
+            #     if ap[0] > best_ap_list[0]:
+            #         best_ap_list[0] = ap[0]
+            #         best_ap_list[1] = iter_id
+            #         model.save('./weights/best_model.h5')
+            #     logger.info("Best test ap: {}, in iter: {}".format(
+            #         best_ap_list[0], best_ap_list[1]))
 
             # ==================== exit ====================
             if iter_id == cfg.max_iters:

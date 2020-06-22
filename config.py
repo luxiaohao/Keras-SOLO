@@ -29,9 +29,9 @@ class TrainConfig(object):
         # 模式。 0-从头训练，1-读取之前的模型继续训练（model_path可以是'yolov4.h5'、'./weights/step00001000.h5'这些。）
         self.pattern = 1
         self.lr = 0.0001
-        self.batch_size = 4
+        self.batch_size = 2
         # 如果self.pattern = 1，需要指定self.model_path表示从哪个模型读取权重继续训练。
-        self.model_path = 'yolov4'
+        self.model_path = 'solo.h5'
         # self.model_path = './weights/step00001000'
 
         # ========= 一些设置 =========
