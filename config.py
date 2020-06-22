@@ -26,11 +26,11 @@ class TrainConfig(object):
     """
     def __init__(self):
         # COCO数据集
-        # self.train_path = '../COCO/annotations/instances_train2017.json'
+        self.train_path = '../COCO/annotations/instances_train2017.json'
         self.train_path = '../COCO/annotations/instances_val2017.json'
         self.val_path = '../COCO/annotations/instances_val2017.json'
         self.classes_path = 'data/coco_classes.txt'
-        # self.train_pre_path = '../COCO/train2017/'  # 训练集图片相对路径
+        self.train_pre_path = '../COCO/train2017/'  # 训练集图片相对路径
         self.train_pre_path = '../COCO/val2017/'  # 验证集图片相对路径
         self.val_pre_path = '../COCO/val2017/'  # 验证集图片相对路径
 

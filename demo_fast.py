@@ -117,7 +117,8 @@ if __name__ == '__main__':
     fpn = FPN(in_channels=[256, 512, 1024, 2048], out_channels=256, num_outs=5)
     head = DecoupledSOLOHead()
     solo = SOLO(resnet, fpn, head)
-    outs = solo(inputs, cfg, eval=True)
+    # outs = solo(inputs, cfg, eval=True)
+    outs = solo(inputs, cfg, eval=False)
     solo = keras.models.Model(inputs=inputs, outputs=outs)
     solo.load_weights(model_path, by_name=True)
 

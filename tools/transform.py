@@ -117,6 +117,7 @@ class DecodeImage(BaseOperator):
                 masks = masks.reshape(-1, im.shape[0], im.shape[1])  # shape=(N, height, width)
                 gt_mask = masks.transpose(1, 2, 0)     # shape=(height, width, N)
             else:   # 对于没有gt的纯背景图，弄1个方便后面的增强跟随sample['image']
+                print('NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN')
                 gt_mask = np.zeros((im.shape[0], im.shape[1], 1), dtype=np.int32)
             sample['gt_mask'] = gt_mask
         return sample
@@ -587,6 +588,8 @@ class RandomShape(BaseOperator):
         ] if random_inter else []
 
     def __call__(self, samples, context=None):
+        # 是randomShape导致了Process finished with exit code -1073740940 (0xC0000374)
+
         size_idx = np.random.randint(len(self.sizes))
         shape = self.sizes[size_idx]
         # mask_shape = shape // 4
@@ -599,6 +602,11 @@ class RandomShape(BaseOperator):
             scale_x = float(shape[0]) / w
             scale_y = float(shape[1]) / h
             if self.keep_ratio:
+                print('wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww')
+                print(scale_x)
+                print(scale_y)
+                print(method)
+                print(im.shape)
                 scale_factor = min(scale_x, scale_y)
                 im = cv2.resize(im, None, None, fx=scale_factor, fy=scale_factor, interpolation=method)
             else:
@@ -607,13 +615,22 @@ class RandomShape(BaseOperator):
             gt_mask = samples[i]['gt_mask']
             # 掩码也跟随着插值成图片大小
             # 不能随机插值方法，有的方法不适合50个通道。
+            # 不转换类型的话，插值失败
+            print(gt_mask.shape)
+            # print(scale_y)
+            # print(method)
+            # print(im.shape)
+            gt_mask = gt_mask.astype(np.uint8)
+
+            # 是这一句randomShape导致了Process finished with exit code -1073740940 (0xC0000374)。填充到3个来避免？
             gt_mask = cv2.resize(gt_mask, (im.shape[1], im.shape[0]), interpolation=cv2.INTER_LINEAR)
-            if len(gt_mask.shape) == 2:   # 只有一个通道时，会变成二维数组
-                gt_mask = gt_mask[:, :, np.newaxis]
-            gt_mask = (gt_mask > 0.5).astype(np.float32)
+            # if len(gt_mask.shape) == 2:   # 只有一个通道时，会变成二维数组
+            #     gt_mask = gt_mask[:, :, np.newaxis]
+            # gt_mask = (gt_mask > 0.5).astype(np.float32)
+            # print(gt_mask.shape)
 
             # 方框也要变
-            gt_bbox = samples[i]['gt_bbox']
+            '''gt_bbox = samples[i]['gt_bbox']
 
             # 填充黑边
             if self.keep_ratio:
@@ -633,7 +650,7 @@ class RandomShape(BaseOperator):
                 gt_bbox *= [scale_x, scale_y, scale_x, scale_y]
             samples[i]['gt_bbox'] = gt_bbox
             samples[i]['h'] = shape[1]
-            samples[i]['w'] = shape[0]
+            samples[i]['w'] = shape[0]'''
         return samples
 
 class NormalizeImage(BaseOperator):
@@ -860,8 +877,8 @@ class Gt2SoloTarget(BaseOperator):
             output_stride = stride / 2   # 因为网络最后对ins_feat_x、ins_feat_y进行上采样，所以stride / 2
 
             for seg_mask, gt_label, half_h, half_w in zip(gt_masks_raw_this_layer, gt_labels_raw_this_layer, half_hs, half_ws):
-                if seg_mask.sum() < 10:   # 忽略太小的物体
-                   continue
+                # if seg_mask.sum() < 10:   # 忽略太小的物体
+                #    continue
                 # mass center
                 upsampled_size = (featmap_sizes[0][0] * 4, featmap_sizes[0][1] * 4)   # 也就是输入图片的大小
                 center_h, center_w = ndimage.measurements.center_of_mass(seg_mask)    # 求物体掩码的质心。scipy提供技术支持。

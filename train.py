@@ -58,7 +58,7 @@ def dice_loss(pred_mask, gt_mask, gt_obj):
     return (1-d) * loss_mask_mask
 
 
-def solo_loss(args, batch_size, num_layers):
+def solo_loss2(args, batch_size, num_layers):
     p = 0
 
     ins_pred_x_list = []
@@ -159,6 +159,108 @@ def solo_loss(args, batch_size, num_layers):
 
     return [loss_masks, loss_clss]
 
+def solo_loss(args, batch_size, num_layers):
+    p = 0
+
+    ins_pred_x_list = []
+    for i in range(num_layers):
+        ins_pred_x_list.append(args[p])   # 从小感受野 到 大感受野 （从多格子 到 少格子）
+        p += 1
+
+    ins_pred_y_list = []
+    for i in range(num_layers):
+        ins_pred_y_list.append(args[p])   # 从小感受野 到 大感受野 （从多格子 到 少格子）
+        p += 1
+
+    cate_pred_list = []
+    for i in range(num_layers):
+        cate_pred_list.append(args[p])    # 从小感受野 到 大感受野 （从多格子 到 少格子）
+        p += 1
+
+    batch_gt_objs_tensors = []
+    for i in range(num_layers):
+        batch_gt_objs_tensors.append(args[p])
+        p += 1
+
+    batch_gt_clss_tensors = []
+    for i in range(num_layers):
+        batch_gt_clss_tensors.append(args[p])
+        p += 1
+
+    batch_gt_masks_tensors = []
+    for i in range(num_layers):
+        batch_gt_masks_tensors.append(args[p])
+        p += 1
+
+    batch_gt_pos_idx_tensors = []
+    for i in range(num_layers):
+        batch_gt_pos_idx_tensors.append(args[p])
+        p += 1
+
+
+    # ================= 计算损失 =================
+    num_ins = 0.  # 记录这一批图片的正样本个数
+    loss_clss, loss_masks = [], []
+    for bid in range(batch_size):
+        for lid in range(num_layers):
+            # ================ 掩码损失 ======================
+            pred_mask_x = ins_pred_x_list[lid][bid]
+            pred_mask_y = ins_pred_y_list[lid][bid]
+            pred_mask_x = tf.transpose(pred_mask_x, perm=[2, 0, 1])
+            pred_mask_y = tf.transpose(pred_mask_y, perm=[2, 0, 1])
+
+            gt_objs = batch_gt_objs_tensors[lid][bid]
+            gt_masks = batch_gt_masks_tensors[lid][bid]
+            pmidx = batch_gt_pos_idx_tensors[lid][bid]
+
+            idx_sum = tf.reduce_sum(pmidx, axis=1)
+            keep = tf.where(idx_sum > -1)
+            keep = tf.reshape(keep, (-1, ))
+            pmidx = tf.gather(pmidx, keep)
+
+            yx_idx = pmidx[:, :2]
+            y_idx = pmidx[:, 0]
+            x_idx = pmidx[:, 1]
+            m_idx = pmidx[:, 2]
+
+            # 抽出来
+            gt_obj = tf.gather_nd(gt_objs, yx_idx)
+            mask_y = tf.gather(pred_mask_y, y_idx)
+            mask_x = tf.gather(pred_mask_x, x_idx)
+            gt_mask = tf.gather(gt_masks, m_idx)
+
+            # 正样本数量
+            num_ins += tf.reduce_sum(gt_obj)
+
+            pred_mask = tf.sigmoid(mask_x) * tf.sigmoid(mask_y)
+            loss_mask = dice_loss(pred_mask, gt_mask, gt_obj)
+            loss_masks.append(loss_mask)
+
+
+            # ================ 分类损失 ======================
+            gamma = 2.0
+            alpha = 0.25
+            pred_conf = cate_pred_list[lid][bid]
+            pred_conf = tf.sigmoid(pred_conf)
+            gt_clss = batch_gt_clss_tensors[lid][bid]
+            pos_loss = gt_clss * (0 - tf.log(pred_conf + 1e-9)) * tf.pow(1 - pred_conf, gamma) * alpha
+            neg_loss = (1 - gt_clss) * (0 - tf.log(1 - pred_conf + 1e-9)) * tf.pow(pred_conf, gamma) * (1 - alpha)
+            clss_loss = pos_loss + neg_loss
+            clss_loss = tf.reduce_sum(clss_loss, axis=[0, 1])
+            loss_clss.append(clss_loss)
+    loss_masks = tf.concat(loss_masks, axis=0)
+    ins_loss_weight = 3.0
+    loss_masks = tf.reduce_sum(loss_masks) * ins_loss_weight
+    loss_masks = loss_masks / (num_ins + 1e-9)   # 损失同原版SOLO，之所以不直接用tf.reduce_mean()，是因为多了一些0损失占位，分母并不等于num_ins。
+
+    loss_clss = tf.concat(loss_clss, axis=0)
+    clss_loss_weight = 1.0
+    loss_clss = tf.reduce_sum(loss_clss) * clss_loss_weight
+    loss_clss = loss_clss / (num_ins + 1e-9)
+
+    return [loss_masks, loss_clss]
+    # return loss_masks
+
 
 def multi_thread_op(i, samples, decodeImage, context, train_dataset, with_mixup, mixupImage,
                      photometricDistort, randomCrop, randomFlipImage):
@@ -201,8 +303,8 @@ if __name__ == '__main__':
 
         # 冻结，使得需要的显存减少。6G的卡建议这样配置。11G的卡建议不冻结。
         # freeze_before = 'conv2d_60'
-        # freeze_before = 'conv2d_72'
-        freeze_before = 'conv2d_86'
+        freeze_before = 'conv2d_785645'
+        # freeze_before = 'conv2d_86'
         for i in range(len(model_body.layers)):
             ly = model_body.layers[i]
             if ly.name == freeze_before:
@@ -219,7 +321,7 @@ if __name__ == '__main__':
     batch_gt_pos_idx_tensors = []
     for lid in range(num_layers):
         sample_layer_gt_objs = layers.Input(name='layer%d_gt_objs' % (lid, ), shape=(None, None, 1), dtype='float32')
-        sample_layer_gt_clss = layers.Input(name='layer%d_gt_clss' % (lid, ), shape=(None, None, None), dtype='float32')
+        sample_layer_gt_clss = layers.Input(name='layer%d_gt_clss' % (lid, ), shape=(None, None, num_classes), dtype='float32')
         sample_layer_gt_masks = layers.Input(name='layer%d_gt_masks' % (lid, ), shape=(None, None, None), dtype='float32')
         sample_layer_gt_pos_idx = layers.Input(name='layer%d_gt_pos_idx' % (lid, ), shape=(None, 3), dtype='int32')
         batch_gt_objs_tensors.append(sample_layer_gt_objs)
@@ -272,7 +374,7 @@ if __name__ == '__main__':
     # pytorch版为了用一个张量(bz, c, h2, w2)表示这一批不同分辨率的图片，所有图片会向最大分辨率的图片看齐（通过填充黑边0）。
     # 而且h2, w2很大概率只有一个等于被选中的h, w，另一个是填充的最小的能被32整除的。
     # 这里和原作稍有不同，按照size_divisor=None处理，即统一填充到被选中的分辨率(w, h)。在考虑后面改为跟随原作。
-    randomShape = RandomShape()     # pytorch版把掩码的注解放到cpu内存里('DefaultFormatBundle')。想个法子也弄一下。
+    randomShape = RandomShape(sizes=[(320, 320), (320, 320)])     # pytorch版把掩码的注解放到cpu内存里('DefaultFormatBundle')。想个法子也弄一下。
     normalizeImage = NormalizeImage(is_scale=False, is_channel_first=False)  # 图片归一化。
     gt2SoloTarget = Gt2SoloTarget()
 
@@ -290,7 +392,7 @@ if __name__ == '__main__':
     best_ap_list = [0.0, 0]  #[map, iter]
     while True:   # 无限个epoch
         # 每个epoch之前洗乱
-        np.random.shuffle(train_indexes)
+        # np.random.shuffle(train_indexes)
         for step in range(train_steps):
             iter_id += 1
 
@@ -319,27 +421,70 @@ if __name__ == '__main__':
             # if os.path.exists('temp/'): shutil.rmtree('temp/')
             # os.mkdir('temp/')
             # samples = randomShape(samples, context)
-            for r, sample in enumerate(samples):
-                img = sample['image']
-                gt_score = sample['gt_score']
-                gt_mask = sample['gt_mask']
-                aa = gt_mask.transpose(2, 0, 1)
-                cv2.imwrite('temp/%d.jpg'%r, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-                for rr, sc in enumerate(gt_score):
-                    if sc > 0:
-                        m = gt_mask[:, :, rr]
-                        cv2.imwrite('temp/%d_%d.jpg'%(r, rr), m*255)
+            # for r, sample in enumerate(samples):
+            #     img = sample['image']
+            #     gt_score = sample['gt_score']
+            #     gt_mask = sample['gt_mask']
+            #     aa = gt_mask.transpose(2, 0, 1)
+            #     cv2.imwrite('temp/%d.jpg'%r, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+            #     for rr, sc in enumerate(gt_score):
+            #         if sc > 0:
+            #             m = gt_mask[:, :, rr]
+            #             cv2.imwrite('temp/%d_%d.jpg'%(r, rr), m*255)
 
             # batch_transforms
+            # 是randomShape导致了Process finished with exit code -1073740940 (0xC0000374)
             samples = randomShape(samples, context)
-            samples = normalizeImage(samples, context)
-            batch_image, batch_gt_objs, batch_gt_clss, batch_gt_masks, batch_gt_pos_idx = gt2SoloTarget(samples, context)
+            # samples = normalizeImage(samples, context)
+            # batch_image, batch_gt_objs, batch_gt_clss, batch_gt_masks, batch_gt_pos_idx = gt2SoloTarget(samples, context)
+
+            # dic = {}
+            # dic['im'] = batch_image
+            # dic['batch_gt_objs0'] = batch_gt_objs[0]
+            # dic['batch_gt_objs1'] = batch_gt_objs[1]
+            # dic['batch_gt_objs2'] = batch_gt_objs[2]
+            # dic['batch_gt_objs3'] = batch_gt_objs[3]
+            # dic['batch_gt_objs4'] = batch_gt_objs[4]
+            #
+            # dic['batch_gt_clss0'] = batch_gt_clss[0]
+            # dic['batch_gt_clss1'] = batch_gt_clss[1]
+            # dic['batch_gt_clss2'] = batch_gt_clss[2]
+            # dic['batch_gt_clss3'] = batch_gt_clss[3]
+            # dic['batch_gt_clss4'] = batch_gt_clss[4]
+            #
+            # dic['batch_gt_masks0'] = batch_gt_masks[0]
+            # dic['batch_gt_masks1'] = batch_gt_masks[1]
+            # dic['batch_gt_masks2'] = batch_gt_masks[2]
+            # dic['batch_gt_masks3'] = batch_gt_masks[3]
+            # dic['batch_gt_masks4'] = batch_gt_masks[4]
+            #
+            # dic['batch_gt_pos_idx0'] = batch_gt_pos_idx[0]
+            # dic['batch_gt_pos_idx1'] = batch_gt_pos_idx[1]
+            # dic['batch_gt_pos_idx2'] = batch_gt_pos_idx[2]
+            # dic['batch_gt_pos_idx3'] = batch_gt_pos_idx[3]
+            # dic['batch_gt_pos_idx4'] = batch_gt_pos_idx[4]
+            # np.savez('bengkui', **dic)
+
+            dic2 = np.load('bengkui.npz')
+            batch_image = dic2['im']
+            batch_gt_objs = [dic2['batch_gt_objs0'], dic2['batch_gt_objs1'], dic2['batch_gt_objs2'], dic2['batch_gt_objs3'], dic2['batch_gt_objs4']]
+            batch_gt_clss = [dic2['batch_gt_clss0'], dic2['batch_gt_clss1'], dic2['batch_gt_clss2'], dic2['batch_gt_clss3'], dic2['batch_gt_clss4']]
+            batch_gt_masks = [dic2['batch_gt_masks0'], dic2['batch_gt_masks1'], dic2['batch_gt_masks2'], dic2['batch_gt_masks3'], dic2['batch_gt_masks4']]
+            batch_gt_pos_idx = [dic2['batch_gt_pos_idx0'], dic2['batch_gt_pos_idx1'], dic2['batch_gt_pos_idx2'], dic2['batch_gt_pos_idx3'], dic2['batch_gt_pos_idx4']]
+
+            # print(batch_image.shape)
+            # print(batch_gt_masks[0].shape)
+            # print(batch_gt_masks[1].shape)
+            # print(batch_gt_masks[2].shape)
+            # print(batch_gt_masks[3].shape)
+            # print(batch_gt_masks[4].shape)
             batch_xs = [batch_image, *batch_gt_objs, *batch_gt_clss, *batch_gt_masks, *batch_gt_pos_idx]
-            y_true = [np.zeros(batch_size), np.zeros(batch_size)]
+            # y_true = [np.zeros(batch_size), np.zeros(batch_size)]
+            y_true = [np.zeros((batch_size, )), np.zeros((batch_size, ))]
             losses = model.train_on_batch(batch_xs, y_true)
 
             # ==================== log ====================
-            if iter_id % 20 == 0:
+            if iter_id % 1 == 0:
                 strs = 'Train iter: {}, all_loss: {:.6f}, mask_loss: {:.6f}, clss_loss: {:.6f}, eta: {}'.format(
                     iter_id, losses[0], losses[1], losses[2], eta)
                 logger.info(strs)
