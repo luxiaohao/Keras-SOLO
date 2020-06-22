@@ -176,7 +176,7 @@ class DecoupledSOLOHead(object):
             self.dsolo_ins_list_y.append(conv2d_2)
         self.dsolo_cate = layers.Conv2D(self.num_classes, 3, padding='same', strides=1, use_bias=True)
 
-    def __call__(self, feats, eval):
+    def __call__(self, feats, cfg, eval):
         # DecoupledSOLOHead都是这样，一定有5个张量，5个张量的strides=[8, 8, 16, 32, 32]，所以先对首尾张量进行插值。
         new_feats = [Resize(tf.shape(feats[1])[1], tf.shape(feats[1])[2], 'BILINEAR')(feats[0]),
                      feats[1],
@@ -231,7 +231,58 @@ class DecoupledSOLOHead(object):
             ins_pred_x_list.append(ins_pred_x)
             ins_pred_y_list.append(ins_pred_y)
             cate_pred_list.append(cate_pred)
-        return ins_pred_x_list+ ins_pred_y_list+ cate_pred_list
+        if eval:
+            # pred_mask_x = layers.Concatenate()(ins_pred_x_list)
+            # pred_mask_y = layers.Concatenate()(ins_pred_y_list)
+            num_layers = 5
+            def output_layer(args):
+                p = 0
+                pred_mask_x = []
+                for i in range(num_layers):
+                    mask_x = args[p]   # 从小感受野 到 大感受野 （从多格子 到 少格子）
+                    mask_h = tf.shape(mask_x)[1]
+                    mask_w = tf.shape(mask_x)[2]
+                    n_grid = tf.shape(mask_x)[3]
+                    mask_x = tf.reshape(mask_x, (mask_h, mask_w, n_grid))
+                    mask_x = tf.transpose(mask_x, perm=[2, 0, 1])
+                    pred_mask_x.append(mask_x)
+                    p += 1
+                pred_mask_x = tf.concat(pred_mask_x, axis=0)
+
+                pred_mask_y = []
+                for i in range(num_layers):
+                    mask_y = args[p]   # 从小感受野 到 大感受野 （从多格子 到 少格子）
+                    mask_h = tf.shape(mask_y)[1]
+                    mask_w = tf.shape(mask_y)[2]
+                    n_grid = tf.shape(mask_y)[3]
+                    mask_y = tf.reshape(mask_y, (mask_h, mask_w, n_grid))
+                    mask_y = tf.transpose(mask_y, perm=[2, 0, 1])
+                    pred_mask_y.append(mask_y)
+                    p += 1
+                pred_mask_y = tf.concat(pred_mask_y, axis=0)
+
+                pred_cate = []
+                for i in range(num_layers):
+                    c = args[p]   # 从小感受野 到 大感受野 （从多格子 到 少格子）
+                    c = tf.reshape(c, (-1, self.num_classes))
+                    pred_cate.append(c)
+                    p += 1
+                pred_cate = tf.concat(pred_cate, axis=0)
+
+                o = self.get_seg_single(pred_cate,
+                       pred_mask_x,
+                       pred_mask_y,
+                       upsampled_size,
+                       upsampled_size,
+                       cfg)
+                # 用fastnms
+                # output = fastnms(all_pred_boxes, all_pred_scores, conf_thresh, nms_thresh, keep_top_k, nms_top_k)
+
+                return o
+
+            output = layers.Lambda(output_layer)([*ins_pred_x_list, *ins_pred_y_list, *cate_pred_list])
+            return output
+        return ins_pred_x_list + ins_pred_y_list + cate_pred_list
         # return ins_pred_x_list, ins_pred_y_list, cate_pred_list
 
     def get_seg_single(self,
@@ -239,11 +290,8 @@ class DecoupledSOLOHead(object):
                        seg_preds_x,
                        seg_preds_y,
                        featmap_size,
-                       img_shape,
                        ori_shape,
-                       scale_factor,
-                       cfg,
-                       rescale=False, debug=False):
+                       cfg):
         '''
         Args:
             cate_preds:    同一张图片5个输出层的输出汇合  [40*40+36*36+24*24+16*16+12*12, 80]
@@ -363,6 +411,11 @@ class DecoupledSOLOHead(object):
                 seg_masks_soft = tf.transpose(seg_masks_soft, [1, 2, 0])
                 seg_masks_soft = seg_masks_soft[tf.newaxis, :, :, :]
 
+                # seg_masks_soft = tf.image.resize_images(seg_masks_soft, tf.convert_to_tensor([featmap_size[0] * 4, featmap_size[1] * 4]), method=tf.image.ResizeMethod.BILINEAR)
+                # seg_masks = tf.image.resize_images(seg_masks_soft, tf.convert_to_tensor([ori_shape[0], ori_shape[1]]), method=tf.image.ResizeMethod.BILINEAR)
+
+                bb = [featmap_size[0] * 4, featmap_size[1] * 4]
+                print()
                 seg_masks_soft = tf.image.resize_images(seg_masks_soft, [featmap_size[0] * 4, featmap_size[1] * 4], method=tf.image.ResizeMethod.BILINEAR)
                 seg_masks = tf.image.resize_images(seg_masks_soft, [ori_shape[0], ori_shape[1]], method=tf.image.ResizeMethod.BILINEAR)
 
@@ -399,7 +452,7 @@ class DecoupledSOLOHead(object):
         seg_masks, cate_labels, cate_scores = tf.cond(tf.equal(tf.shape(cate_scores)[0], 0),
                                                       no_objs_1,
                                                       lambda: exist_objs_1(cate_scores, seg_masks_soft, seg_masks, sum_masks, cate_labels))
-        return seg_masks, cate_labels, cate_scores
+        return [seg_masks, cate_labels, cate_scores]
 
 
 

@@ -7,15 +7,6 @@
 #   Description : keras_solo
 #
 # ================================================================
-import keras
-import tensorflow as tf
-import keras.layers as layers
-from keras import backend as K
-from keras.engine.topology import Layer
-
-from model.neck import FPN
-from model.head import DecoupledSOLOHead
-
 
 class SOLO(object):
     def __init__(self, backbone, neck, head):
@@ -24,10 +15,13 @@ class SOLO(object):
         self.neck = neck
         self.head = head
 
-    def __call__(self, x, eval):
+    def __call__(self, x, cfg, eval):
         x = self.backbone(x)
         x = self.neck(x)
-        x = self.head(x, eval)
+        if eval:
+            x = self.head(x, cfg.test_cfg, eval)
+        else:
+            x = self.head(x, None, eval)
         return x
 
 

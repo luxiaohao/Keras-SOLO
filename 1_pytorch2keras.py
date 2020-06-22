@@ -216,7 +216,7 @@ solo = SOLO(resnet, fpn, head)
 
 inputs = layers.Input(shape=(None, None, 3))
 # inputs = layers.Input(shape=(416, 416, 3))
-outs = solo(inputs, eval=True)
+outs = solo(inputs, None, eval=False)
 
 model = keras.models.Model(inputs=inputs, outputs=outs)
 model.summary()

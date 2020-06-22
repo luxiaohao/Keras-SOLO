@@ -9,6 +9,17 @@
 # ================================================================
 
 
+class TestConfig(object):
+    def __init__(self):
+        self.nms_pre = 500
+        self.score_thr = 0.01
+        self.mask_thr = 0.005
+        self.update_thr = 0.05
+        self.kernel = 'gaussian'
+        self.sigma = 2.0
+        self.max_per_img = 100
+
+
 class TrainConfig(object):
     """
     train.py里需要的配置
@@ -63,6 +74,9 @@ class TrainConfig(object):
         # PadBox
         self.num_max_boxes = 70
         self.downsample_ratios = [32, 16, 8]
+
+        # test
+        self.test_cfg = TestConfig()
 
 
 
