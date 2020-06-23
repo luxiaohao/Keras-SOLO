@@ -18,6 +18,7 @@ import numpy as np
 import tensorflow as tf
 import keras
 import keras.layers as layers
+from scipy import ndimage
 
 from config import TrainConfig
 from model.head import DecoupledSOLOHead
@@ -51,29 +52,43 @@ def process_image(img, input_shape):
     return pimage
 
 
-def draw(image, boxes, scores, classes, all_classes, colors):
+def draw(image, scores, classes, masks, all_classes, mask_alpha=0.45):
     image_h, image_w, _ = image.shape
-    for box, score, cl in zip(boxes, scores, classes):
-        x0, y0, x1, y1 = box
-        left = max(0, np.floor(x0 + 0.5).astype(int))
-        top = max(0, np.floor(y0 + 0.5).astype(int))
-        right = min(image.shape[1], np.floor(x1 + 0.5).astype(int))
-        bottom = min(image.shape[0], np.floor(y1 + 0.5).astype(int))
+
+    for score, cl, ms in zip(scores, classes, masks):
+        center_y, center_x = ndimage.measurements.center_of_mass(ms)  # 求物体掩码的质心。scipy提供技术支持。
+
+        cl = int(cl)
+
+        # 随机颜色
+        # bbox_color = random.choice(colors)
+        # 同一类别固定颜色
         bbox_color = colors[cl]
-        # bbox_thick = 1 if min(image_h, image_w) < 400 else 2
-        bbox_thick = 1
-        cv2.rectangle(image, (left, top), (right, bottom), bbox_color, bbox_thick)
+
+
+        # 在这里上掩码颜色
+        color = np.array(bbox_color)
+        color = np.reshape(color, (1, 1, 3))
+        ms = np.expand_dims(ms, axis=2)
+        ms = np.tile(ms, (1, 1, 3))
+        color_ms = ms * color * mask_alpha
+        color_im = ms * image * (1 - mask_alpha)
+        image = color_im + color_ms + (1 - ms) * image
+
+        # 类别、得分
+        center_x = max(0, np.floor(center_x + 0.5).astype(int))
+        center_y = max(0, np.floor(center_y + 0.5).astype(int))
         bbox_mess = '%s: %.2f' % (all_classes[cl], score)
-        t_size = cv2.getTextSize(bbox_mess, 0, 0.5, thickness=1)[0]
-        cv2.rectangle(image, (left, top), (left + t_size[0], top - t_size[1] - 3), bbox_color, -1)
-        cv2.putText(image, bbox_mess, (left, top - 2), cv2.FONT_HERSHEY_SIMPLEX,
+        cv2.putText(image, bbox_mess, (center_x, center_y - 2), cv2.FONT_HERSHEY_SIMPLEX,
                     0.5, (0, 0, 0), 1, lineType=cv2.LINE_AA)
+    return image
+
 
 
 
 # 6G的卡，训练时如果要预测，则设置use_gpu = False，否则显存不足。
 use_gpu = False
-# use_gpu = True
+use_gpu = True
 
 # 显存分配。
 if use_gpu:
@@ -90,19 +105,13 @@ if __name__ == '__main__':
 
     classes_path = 'data/coco_classes.txt'
     # model_path可以是'solo.h5'、'./weights/step00001000.h5'这些。
-    model_path = 'solo.h5'
-    # model_path = './weights/step00070000.h5'
+    # model_path = 'solo.h5'
+    model_path = './weights/step00007000.h5'
 
     # input_shape越大，精度会上升，但速度会下降。
     # input_shape = (672, 672)
     # input_shape = (416, 416)
     input_shape = (800, 800)
-
-    # 验证时的分数阈值和nms_iou阈值
-    conf_thresh = 0.05
-    nms_thresh = 0.45
-    keep_top_k = 100
-    nms_top_k = 100
 
     # 是否给图片画框。不画可以提速。读图片、后处理还可以继续优化。
     draw_image = True
@@ -117,8 +126,8 @@ if __name__ == '__main__':
     fpn = FPN(in_channels=[256, 512, 1024, 2048], out_channels=256, num_outs=5)
     head = DecoupledSOLOHead()
     solo = SOLO(resnet, fpn, head)
-    # outs = solo(inputs, cfg, eval=True)
-    outs = solo(inputs, cfg, eval=False)
+    outs = solo(inputs, cfg, eval=True)
+    # outs = solo(inputs, cfg, eval=False)
     solo = keras.models.Model(inputs=inputs, outputs=outs)
     solo.load_weights(model_path, by_name=True)
 
@@ -151,18 +160,17 @@ if __name__ == '__main__':
         image = cv2.imread('images/test/' + filename)
         pimage = process_image(np.copy(image), input_shape)
         outs = solo.predict(pimage)
-        masks, classes, scores = outs[0], outs[1], outs[2]
-        if scores[0] < 0:
-            print(filename)
-            continue
-        else:
-            print()
-
-        img_h, img_w, _ = image.shape
-        a = input_shape[0]
-        boxes = boxes * [img_w/a, img_h/a, img_w/a, img_h/a]
-        if boxes is not None and draw_image:
-            draw(image, boxes, scores, classes, all_classes, colors)
+        masks, classes, scores = outs[0][0], outs[1][0], outs[2][0]
+        h, w, _ = image.shape
+        # 后处理那里，一定不会返回空。若没有物体，scores[0]会是负数，由此来判断有没有物体。
+        if scores[0] > 0:
+            masks = masks.transpose(1, 2, 0)
+            masks = cv2.resize(masks, (w, h), interpolation=cv2.INTER_LINEAR)
+            masks = np.reshape(masks, (h, w, -1))
+            masks = masks.transpose(2, 0, 1)
+            masks = (masks > 0.5).astype(np.float32)
+            if draw_image:
+                image = draw(image, scores, classes, masks, all_classes)
 
         # 估计剩余时间
         start_time = end_time

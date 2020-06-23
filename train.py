@@ -304,7 +304,7 @@ if __name__ == '__main__':
 
         # 冻结，使得需要的显存减少。6G的卡建议这样配置。11G的卡建议不冻结。
         # freeze_before = 'conv2d_60'
-        freeze_before = 'conv2d_78'
+        freeze_before = 'conv2d_55'
         for i in range(len(model_body.layers)):
             ly = model_body.layers[i]
             if ly.name == freeze_before:

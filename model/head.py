@@ -232,58 +232,44 @@ class DecoupledSOLOHead(object):
             ins_pred_y_list.append(ins_pred_y)
             cate_pred_list.append(cate_pred)
         if eval:
-            # pred_mask_x = layers.Concatenate()(ins_pred_x_list)
-            # pred_mask_y = layers.Concatenate()(ins_pred_y_list)
             num_layers = 5
             def output_layer(args):
                 p = 0
                 pred_mask_x = []
                 for i in range(num_layers):
                     mask_x = args[p]   # 从小感受野 到 大感受野 （从多格子 到 少格子）
-                    mask_h = tf.shape(mask_x)[1]
-                    mask_w = tf.shape(mask_x)[2]
-                    n_grid = tf.shape(mask_x)[3]
-                    mask_x = tf.reshape(mask_x, (mask_h, mask_w, n_grid))
-                    mask_x = tf.transpose(mask_x, perm=[2, 0, 1])
+                    mask_x = tf.transpose(mask_x, perm=[0, 3, 1, 2])
                     pred_mask_x.append(mask_x)
                     p += 1
-                pred_mask_x = tf.concat(pred_mask_x, axis=0)
+                pred_mask_x = tf.concat(pred_mask_x, axis=1)
 
                 pred_mask_y = []
                 for i in range(num_layers):
                     mask_y = args[p]   # 从小感受野 到 大感受野 （从多格子 到 少格子）
-                    mask_h = tf.shape(mask_y)[1]
-                    mask_w = tf.shape(mask_y)[2]
-                    n_grid = tf.shape(mask_y)[3]
-                    mask_y = tf.reshape(mask_y, (mask_h, mask_w, n_grid))
-                    mask_y = tf.transpose(mask_y, perm=[2, 0, 1])
+                    mask_y = tf.transpose(mask_y, perm=[0, 3, 1, 2])
                     pred_mask_y.append(mask_y)
                     p += 1
-                pred_mask_y = tf.concat(pred_mask_y, axis=0)
+                pred_mask_y = tf.concat(pred_mask_y, axis=1)
 
                 pred_cate = []
                 for i in range(num_layers):
                     c = args[p]   # 从小感受野 到 大感受野 （从多格子 到 少格子）
-                    c = tf.reshape(c, (-1, self.num_classes))
+                    c = tf.reshape(c, (1, -1, self.num_classes))
                     pred_cate.append(c)
                     p += 1
-                pred_cate = tf.concat(pred_cate, axis=0)
+                pred_cate = tf.concat(pred_cate, axis=1)
 
-                o = self.get_seg_single(pred_cate,
-                       pred_mask_x,
-                       pred_mask_y,
+                o = self.get_seg_single(pred_cate[0],
+                       pred_mask_x[0],
+                       pred_mask_y[0],
                        upsampled_size,
                        upsampled_size,
                        cfg)
-                # 用fastnms
-                # output = fastnms(all_pred_boxes, all_pred_scores, conf_thresh, nms_thresh, keep_top_k, nms_top_k)
-
                 return o
 
             output = layers.Lambda(output_layer)([*ins_pred_x_list, *ins_pred_y_list, *cate_pred_list])
             return output
         return ins_pred_x_list + ins_pred_y_list + cate_pred_list
-        # return ins_pred_x_list, ins_pred_y_list, cate_pred_list
 
     def get_seg_single(self,
                        cate_preds,
@@ -399,6 +385,13 @@ class DecoupledSOLOHead(object):
 
             # I hate tensorflow.
             def exist_objs_2(cate_scores, seg_masks_soft, cate_labels):
+                # 再做一次阈值过滤？？？我自己加上的
+                keep = tf.where(cate_preds > cfg.score_thr)
+                keep = tf.reshape(keep, (-1,))
+                seg_masks_soft = tf.gather(seg_masks_soft, keep)
+                cate_scores = tf.gather(cate_scores, keep)
+                cate_labels = tf.gather(cate_labels, keep)
+
                 # sort and keep top_k
                 k = tf.shape(cate_scores)[0]
                 _, sort_inds = tf.nn.top_k(cate_scores, k=k, sorted=True)
@@ -414,23 +407,21 @@ class DecoupledSOLOHead(object):
                 # seg_masks_soft = tf.image.resize_images(seg_masks_soft, tf.convert_to_tensor([featmap_size[0] * 4, featmap_size[1] * 4]), method=tf.image.ResizeMethod.BILINEAR)
                 # seg_masks = tf.image.resize_images(seg_masks_soft, tf.convert_to_tensor([ori_shape[0], ori_shape[1]]), method=tf.image.ResizeMethod.BILINEAR)
 
-                bb = [featmap_size[0] * 4, featmap_size[1] * 4]
-                print()
                 seg_masks_soft = tf.image.resize_images(seg_masks_soft, [featmap_size[0] * 4, featmap_size[1] * 4], method=tf.image.ResizeMethod.BILINEAR)
                 seg_masks = tf.image.resize_images(seg_masks_soft, [ori_shape[0], ori_shape[1]], method=tf.image.ResizeMethod.BILINEAR)
 
                 # 插值后处理
-                seg_masks = tf.reshape(seg_masks, tf.shape(seg_masks)[1:])
-                seg_masks = tf.transpose(seg_masks, [2, 0, 1])
-
+                seg_masks = tf.transpose(seg_masks, [0, 3, 1, 2])
                 seg_masks = tf.cast(seg_masks > cfg.mask_thr, tf.float32)
+                cate_labels = tf.reshape(cate_labels, (1, -1))
+                cate_scores = tf.reshape(cate_scores, (1, -1))
                 return seg_masks, cate_labels, cate_scores
 
             # I hate tensorflow.
             def no_objs_2():
-                seg_masks = tf.zeros([1, ], tf.float32) - 1.0
-                cate_labels = tf.zeros([1, ], tf.int64) - 1
-                cate_scores = tf.zeros([1, ], tf.float32) - 1.0
+                seg_masks = tf.zeros([1, 1, 1, 1], tf.float32) - 1.0
+                cate_labels = tf.zeros([1, 1], tf.int64) - 1
+                cate_scores = tf.zeros([1, 1], tf.float32) - 1.0
                 return seg_masks, cate_labels, cate_scores
 
             # 是否有物体
@@ -442,9 +433,9 @@ class DecoupledSOLOHead(object):
 
         # I hate tensorflow.
         def no_objs_1():
-            seg_masks = tf.zeros([1, ], tf.float32) - 1.0
-            cate_labels = tf.zeros([1, ], tf.int64) - 1
-            cate_scores = tf.zeros([1, ], tf.float32) - 1.0
+            seg_masks = tf.zeros([1, 1, 1, 1], tf.float32) - 1.0
+            cate_labels = tf.zeros([1, 1], tf.int64) - 1
+            cate_scores = tf.zeros([1, 1], tf.float32) - 1.0
             return seg_masks, cate_labels, cate_scores
 
         # 是否有物体
