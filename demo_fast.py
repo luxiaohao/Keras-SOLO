@@ -106,7 +106,7 @@ if __name__ == '__main__':
     classes_path = 'data/coco_classes.txt'
     # model_path可以是'solo.h5'、'./weights/step00001000.h5'这些。
     # model_path = 'solo.h5'
-    model_path = './weights/step00007000.h5'
+    model_path = './weights/step00002000.h5'
 
     # input_shape越大，精度会上升，但速度会下降。
     # input_shape = (672, 672)

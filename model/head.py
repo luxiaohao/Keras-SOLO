@@ -377,7 +377,7 @@ class DecoupledSOLOHead(object):
             cate_scores = matrix_nms(seg_masks, cate_labels, cate_scores,
                                      kernel=cfg.kernel, sigma=cfg.sigma, sum_masks=sum_masks)
 
-            keep = tf.where(cate_scores > cfg.update_thr)   # 大于cfg.update_thr才保留
+            keep = tf.where(cate_scores > cfg.update_thr)   # 大于第二个分数阈值才保留
             keep = tf.reshape(keep, (-1, ))
             seg_masks_soft = tf.gather(seg_masks_soft, keep)
             cate_scores = tf.gather(cate_scores, keep)
@@ -385,13 +385,6 @@ class DecoupledSOLOHead(object):
 
             # I hate tensorflow.
             def exist_objs_2(cate_scores, seg_masks_soft, cate_labels):
-                # 再做一次阈值过滤？？？我自己加上的
-                keep = tf.where(cate_preds > cfg.score_thr)
-                keep = tf.reshape(keep, (-1,))
-                seg_masks_soft = tf.gather(seg_masks_soft, keep)
-                cate_scores = tf.gather(cate_scores, keep)
-                cate_labels = tf.gather(cate_labels, keep)
-
                 # sort and keep top_k
                 k = tf.shape(cate_scores)[0]
                 _, sort_inds = tf.nn.top_k(cate_scores, k=k, sorted=True)
