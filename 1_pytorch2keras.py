@@ -208,16 +208,12 @@ def head_copy(conv, gn, conv_name, gn_name):
 
 
 
-
+inputs = layers.Input(shape=(None, None, 3))
 resnet = Resnet(50)
 fpn = FPN(in_channels=[256, 512, 1024, 2048], out_channels=256, num_outs=5)
 head = DecoupledSOLOHead()
 solo = SOLO(resnet, fpn, head)
-
-inputs = layers.Input(shape=(None, None, 3))
-# inputs = layers.Input(shape=(416, 416, 3))
 outs = solo(inputs, None, eval=False)
-
 model = keras.models.Model(inputs=inputs, outputs=outs)
 model.summary()
 keras.utils.vis_utils.plot_model(model, to_file='solo.png', show_shapes=True)

@@ -23,7 +23,7 @@ class TestConfig(object):
         self.max_per_img = 100
 
 
-class TrainConfig(object):
+class DecoupledSOLO_R50_FPN_Config(object):
     """
     train.py里需要的配置
     """

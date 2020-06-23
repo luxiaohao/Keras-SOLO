@@ -20,7 +20,7 @@ import keras
 import keras.layers as layers
 from scipy import ndimage
 
-from config import TrainConfig
+from config import DecoupledSOLO_R50_FPN_Config
 from model.head import DecoupledSOLOHead
 from model.neck import FPN
 from model.resnet import Resnet
@@ -101,7 +101,7 @@ config.gpu_options.per_process_gpu_memory_fraction = 1.0
 set_session(tf.Session(config=config))
 
 if __name__ == '__main__':
-    cfg = TrainConfig()
+    cfg = DecoupledSOLO_R50_FPN_Config()
 
     classes_path = 'data/coco_classes.txt'
     # model_path可以是'solo.h5'、'./weights/step00001000.h5'这些。

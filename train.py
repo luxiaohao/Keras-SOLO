@@ -24,7 +24,7 @@ import os
 import tensorflow as tf
 from keras import backend as K
 
-from config import TrainConfig
+from config import DecoupledSOLO_R50_FPN_Config
 from model.head import DecoupledSOLOHead
 from model.neck import FPN
 from model.resnet import Resnet
@@ -273,7 +273,7 @@ def multi_thread_op(i, samples, decodeImage, context, train_dataset, with_mixup,
     samples[i] = padBox(samples[i], context)
 
 if __name__ == '__main__':
-    cfg = TrainConfig()
+    cfg = DecoupledSOLO_R50_FPN_Config()
 
     class_names = get_classes(cfg.classes_path)
     num_classes = len(class_names)
@@ -285,7 +285,6 @@ if __name__ == '__main__':
 
     # 多尺度训练
     inputs = layers.Input(shape=(None, None, 3))
-    # inputs = layers.Input(shape=(416, 416, 3))
     resnet = Resnet(50)
     fpn = FPN(in_channels=[256, 512, 1024, 2048], out_channels=256, num_outs=5)
     head = DecoupledSOLOHead()
