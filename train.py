@@ -263,13 +263,14 @@ def solo_loss(args, batch_size, num_layers):
 
 
 def multi_thread_op(i, samples, decodeImage, context, train_dataset, with_mixup, mixupImage,
-                     photometricDistort, randomCrop, randomFlipImage):
+                     photometricDistort, randomCrop, randomFlipImage, padBox):
     samples[i] = decodeImage(samples[i], context, train_dataset)
     if with_mixup:
         samples[i] = mixupImage(samples[i], context)
     samples[i] = photometricDistort(samples[i], context)
     samples[i] = randomCrop(samples[i], context)
     samples[i] = randomFlipImage(samples[i], context)
+    samples[i] = padBox(samples[i], context)
 
 if __name__ == '__main__':
     cfg = TrainConfig()
@@ -303,8 +304,7 @@ if __name__ == '__main__':
 
         # 冻结，使得需要的显存减少。6G的卡建议这样配置。11G的卡建议不冻结。
         # freeze_before = 'conv2d_60'
-        freeze_before = 'conv2d_785645'
-        # freeze_before = 'conv2d_86'
+        freeze_before = 'conv2d_78'
         for i in range(len(model_body.layers)):
             ly = model_body.layers[i]
             if ly.name == freeze_before:
@@ -367,6 +367,8 @@ if __name__ == '__main__':
     photometricDistort = PhotometricDistort()   # 颜色扭曲
     randomCrop = RandomCrop()                   # 随机裁剪
     randomFlipImage = RandomFlipImage()         # 随机翻转
+    # 增加PadBox()处理也是为了防止RandomShape()出现Process finished with exit code -1073740940 (0xC0000374)
+    padBox = PadBox(cfg.num_max_boxes)          # 如果gt_bboxes的数量少于num_max_boxes，那么填充坐标是0的bboxes以凑够num_max_boxes。
 
     # batch_transforms
     # 6个分辨率(w, h)，随机选一个分辨率(w, h)训练。也随机选一种插值方式。原版SOLO中，因为设定了size_divisor=32，
@@ -410,7 +412,7 @@ if __name__ == '__main__':
             threads = []
             for i in range(batch_size):
                 t = threading.Thread(target=multi_thread_op, args=(i, samples, decodeImage, context, train_dataset, with_mixup, mixupImage,
-                                                                   photometricDistort, randomCrop, randomFlipImage))
+                                                                   photometricDistort, randomCrop, randomFlipImage, padBox))
                 threads.append(t)
                 t.start()
             # 等待所有线程任务结束。
@@ -435,8 +437,8 @@ if __name__ == '__main__':
             # batch_transforms
             # 是randomShape导致了Process finished with exit code -1073740940 (0xC0000374)
             samples = randomShape(samples, context)
-            # samples = normalizeImage(samples, context)
-            # batch_image, batch_gt_objs, batch_gt_clss, batch_gt_masks, batch_gt_pos_idx = gt2SoloTarget(samples, context)
+            samples = normalizeImage(samples, context)
+            batch_image, batch_gt_objs, batch_gt_clss, batch_gt_masks, batch_gt_pos_idx = gt2SoloTarget(samples, context)
 
             # dic = {}
             # dic['im'] = batch_image
@@ -465,12 +467,12 @@ if __name__ == '__main__':
             # dic['batch_gt_pos_idx4'] = batch_gt_pos_idx[4]
             # np.savez('bengkui', **dic)
 
-            dic2 = np.load('bengkui.npz')
-            batch_image = dic2['im']
-            batch_gt_objs = [dic2['batch_gt_objs0'], dic2['batch_gt_objs1'], dic2['batch_gt_objs2'], dic2['batch_gt_objs3'], dic2['batch_gt_objs4']]
-            batch_gt_clss = [dic2['batch_gt_clss0'], dic2['batch_gt_clss1'], dic2['batch_gt_clss2'], dic2['batch_gt_clss3'], dic2['batch_gt_clss4']]
-            batch_gt_masks = [dic2['batch_gt_masks0'], dic2['batch_gt_masks1'], dic2['batch_gt_masks2'], dic2['batch_gt_masks3'], dic2['batch_gt_masks4']]
-            batch_gt_pos_idx = [dic2['batch_gt_pos_idx0'], dic2['batch_gt_pos_idx1'], dic2['batch_gt_pos_idx2'], dic2['batch_gt_pos_idx3'], dic2['batch_gt_pos_idx4']]
+            # dic2 = np.load('bengkui.npz')
+            # batch_image = dic2['im']
+            # batch_gt_objs = [dic2['batch_gt_objs0'], dic2['batch_gt_objs1'], dic2['batch_gt_objs2'], dic2['batch_gt_objs3'], dic2['batch_gt_objs4']]
+            # batch_gt_clss = [dic2['batch_gt_clss0'], dic2['batch_gt_clss1'], dic2['batch_gt_clss2'], dic2['batch_gt_clss3'], dic2['batch_gt_clss4']]
+            # batch_gt_masks = [dic2['batch_gt_masks0'], dic2['batch_gt_masks1'], dic2['batch_gt_masks2'], dic2['batch_gt_masks3'], dic2['batch_gt_masks4']]
+            # batch_gt_pos_idx = [dic2['batch_gt_pos_idx0'], dic2['batch_gt_pos_idx1'], dic2['batch_gt_pos_idx2'], dic2['batch_gt_pos_idx3'], dic2['batch_gt_pos_idx4']]
 
             # print(batch_image.shape)
             # print(batch_gt_masks[0].shape)
@@ -479,12 +481,12 @@ if __name__ == '__main__':
             # print(batch_gt_masks[3].shape)
             # print(batch_gt_masks[4].shape)
             batch_xs = [batch_image, *batch_gt_objs, *batch_gt_clss, *batch_gt_masks, *batch_gt_pos_idx]
-            # y_true = [np.zeros(batch_size), np.zeros(batch_size)]
-            y_true = [np.zeros((batch_size, )), np.zeros((batch_size, ))]
+            y_true = [np.zeros(batch_size), np.zeros(batch_size)]
+            # y_true = [np.zeros((batch_size, )), np.zeros((batch_size, ))]
             losses = model.train_on_batch(batch_xs, y_true)
 
             # ==================== log ====================
-            if iter_id % 1 == 0:
+            if iter_id % 20 == 0:
                 strs = 'Train iter: {}, all_loss: {:.6f}, mask_loss: {:.6f}, clss_loss: {:.6f}, eta: {}'.format(
                     iter_id, losses[0], losses[1], losses[2], eta)
                 logger.info(strs)
