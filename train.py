@@ -304,7 +304,7 @@ if __name__ == '__main__':
 
         # 冻结，使得需要的显存减少。6G的卡建议这样配置。11G的卡建议不冻结。
         # freeze_before = 'conv2d_60'
-        freeze_before = 'conv2d_55'
+        freeze_before = 'conv2d_70'
         for i in range(len(model_body.layers)):
             ly = model_body.layers[i]
             if ly.name == freeze_before:
@@ -376,7 +376,8 @@ if __name__ == '__main__':
     # pytorch版为了用一个张量(bz, c, h2, w2)表示这一批不同分辨率的图片，所有图片会向最大分辨率的图片看齐（通过填充黑边0）。
     # 而且h2, w2很大概率只有一个等于被选中的h, w，另一个是填充的最小的能被32整除的。
     # 这里和原作稍有不同，按照size_divisor=None处理，即统一填充到被选中的分辨率(w, h)。在考虑后面改为跟随原作。
-    randomShape = RandomShape(sizes=[(320, 320), (320, 320)])     # pytorch版把掩码的注解放到cpu内存里('DefaultFormatBundle')。想个法子也弄一下。
+    # randomShape = RandomShape(sizes=[(320, 320), (320, 320)])
+    randomShape = RandomShape()
     normalizeImage = NormalizeImage(is_scale=False, is_channel_first=False)  # 图片归一化。
     gt2SoloTarget = Gt2SoloTarget()
 
