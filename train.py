@@ -375,7 +375,6 @@ if __name__ == '__main__':
     # pytorch版为了用一个张量(bz, c, h2, w2)表示这一批不同分辨率的图片，所有图片会向最大分辨率的图片看齐（通过填充黑边0）。
     # 而且h2, w2很大概率只有一个等于被选中的h, w，另一个是填充的最小的能被32整除的。
     # 这里和原作稍有不同，按照size_divisor=None处理，即统一填充到被选中的分辨率(w, h)。在考虑后面改为跟随原作。
-    # randomShape = RandomShape(sizes=[(320, 320), (320, 320)])
     randomShape = RandomShape()
     normalizeImage = NormalizeImage(is_scale=False, is_channel_first=False)  # 图片归一化。
     gt2SoloTarget = Gt2SoloTarget()
@@ -394,7 +393,7 @@ if __name__ == '__main__':
     best_ap_list = [0.0, 0]  #[map, iter]
     while True:   # 无限个epoch
         # 每个epoch之前洗乱
-        # np.random.shuffle(train_indexes)
+        np.random.shuffle(train_indexes)
         for step in range(train_steps):
             iter_id += 1
 
@@ -442,7 +441,6 @@ if __name__ == '__main__':
 
             batch_xs = [batch_image, *batch_gt_objs, *batch_gt_clss, *batch_gt_masks, *batch_gt_pos_idx]
             y_true = [np.zeros(batch_size), np.zeros(batch_size)]
-            # y_true = [np.zeros((batch_size, )), np.zeros((batch_size, ))]
             losses = model.train_on_batch(batch_xs, y_true)
 
             # ==================== log ====================
