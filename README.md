@@ -7,7 +7,7 @@ Keras-SOLO, "It solo solo e-e-everybody, I do it solo.", 来自母胎solo的独�
 
 6G的卡也可训练，前提是必须要冻结网络前部分的层。
 
-## 传送门
+## 咩酱刷屏时刻
 
 Keras版YOLOv3: https://github.com/miemie2013/Keras-DIOU-YOLOv3
 
@@ -23,9 +23,11 @@ Keras版YOLOv4: https://github.com/miemie2013/Keras-YOLOv4
 
 Pytorch版YOLOv4: 制作中
 
-Paddle镜像版YOLOv4：https://github.com/miemie2013/Paddle-YOLOv4
+Paddle版YOLOv4：https://github.com/miemie2013/Paddle-YOLOv4
 
 Keras版SOLO: https://github.com/miemie2013/Keras-SOLO
+
+Paddle版SOLO: https://github.com/miemie2013/Paddle-SOLO
 
 ## 更新日记
 
