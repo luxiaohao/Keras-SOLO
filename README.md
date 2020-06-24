@@ -54,7 +54,7 @@ pass
 pass
 
 ## 预测
-infer.py。
+python infer.py
 
 ## Citations
 ```
