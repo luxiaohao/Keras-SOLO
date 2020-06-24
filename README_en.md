@@ -3,7 +3,7 @@ English | [简体中文](README.md)
 # Keras-SOLO
 
 ## Introduction
-Keras-SOLO
+Keras-SOLO, "It solo solo e-e-everybody, I do it solo."
 
 ## My another Repos
 
@@ -22,6 +22,8 @@ Keras version YOLOv4: https://github.com/miemie2013/Keras-YOLOv4
 Pytorch version YOLOv4: coming soon...
 
 PaddlePaddle version YOLOv4：https://github.com/miemie2013/Paddle-YOLOv4
+
+Keras version SOLO: https://github.com/miemie2013/Keras-SOLO
 
 ## Updates
 

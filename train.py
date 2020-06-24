@@ -440,46 +440,6 @@ if __name__ == '__main__':
             samples = normalizeImage(samples, context)
             batch_image, batch_gt_objs, batch_gt_clss, batch_gt_masks, batch_gt_pos_idx = gt2SoloTarget(samples, context)
 
-            # dic = {}
-            # dic['im'] = batch_image
-            # dic['batch_gt_objs0'] = batch_gt_objs[0]
-            # dic['batch_gt_objs1'] = batch_gt_objs[1]
-            # dic['batch_gt_objs2'] = batch_gt_objs[2]
-            # dic['batch_gt_objs3'] = batch_gt_objs[3]
-            # dic['batch_gt_objs4'] = batch_gt_objs[4]
-            #
-            # dic['batch_gt_clss0'] = batch_gt_clss[0]
-            # dic['batch_gt_clss1'] = batch_gt_clss[1]
-            # dic['batch_gt_clss2'] = batch_gt_clss[2]
-            # dic['batch_gt_clss3'] = batch_gt_clss[3]
-            # dic['batch_gt_clss4'] = batch_gt_clss[4]
-            #
-            # dic['batch_gt_masks0'] = batch_gt_masks[0]
-            # dic['batch_gt_masks1'] = batch_gt_masks[1]
-            # dic['batch_gt_masks2'] = batch_gt_masks[2]
-            # dic['batch_gt_masks3'] = batch_gt_masks[3]
-            # dic['batch_gt_masks4'] = batch_gt_masks[4]
-            #
-            # dic['batch_gt_pos_idx0'] = batch_gt_pos_idx[0]
-            # dic['batch_gt_pos_idx1'] = batch_gt_pos_idx[1]
-            # dic['batch_gt_pos_idx2'] = batch_gt_pos_idx[2]
-            # dic['batch_gt_pos_idx3'] = batch_gt_pos_idx[3]
-            # dic['batch_gt_pos_idx4'] = batch_gt_pos_idx[4]
-            # np.savez('bengkui', **dic)
-
-            # dic2 = np.load('bengkui.npz')
-            # batch_image = dic2['im']
-            # batch_gt_objs = [dic2['batch_gt_objs0'], dic2['batch_gt_objs1'], dic2['batch_gt_objs2'], dic2['batch_gt_objs3'], dic2['batch_gt_objs4']]
-            # batch_gt_clss = [dic2['batch_gt_clss0'], dic2['batch_gt_clss1'], dic2['batch_gt_clss2'], dic2['batch_gt_clss3'], dic2['batch_gt_clss4']]
-            # batch_gt_masks = [dic2['batch_gt_masks0'], dic2['batch_gt_masks1'], dic2['batch_gt_masks2'], dic2['batch_gt_masks3'], dic2['batch_gt_masks4']]
-            # batch_gt_pos_idx = [dic2['batch_gt_pos_idx0'], dic2['batch_gt_pos_idx1'], dic2['batch_gt_pos_idx2'], dic2['batch_gt_pos_idx3'], dic2['batch_gt_pos_idx4']]
-
-            # print(batch_image.shape)
-            # print(batch_gt_masks[0].shape)
-            # print(batch_gt_masks[1].shape)
-            # print(batch_gt_masks[2].shape)
-            # print(batch_gt_masks[3].shape)
-            # print(batch_gt_masks[4].shape)
             batch_xs = [batch_image, *batch_gt_objs, *batch_gt_clss, *batch_gt_masks, *batch_gt_pos_idx]
             y_true = [np.zeros(batch_size), np.zeros(batch_size)]
             # y_true = [np.zeros((batch_size, )), np.zeros((batch_size, ))]
