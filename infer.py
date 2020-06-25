@@ -52,7 +52,7 @@ def process_image(img, input_shape):
     return pimage
 
 
-def draw(image, scores, classes, masks, all_classes, mask_alpha=0.45):
+def draw(image, scores, classes, masks, all_classes, colors, mask_alpha=0.45):
     image_h, image_w, _ = image.shape
 
     for score, cl, ms in zip(scores, classes, masks):
@@ -61,9 +61,9 @@ def draw(image, scores, classes, masks, all_classes, mask_alpha=0.45):
         cl = int(cl)
 
         # 随机颜色
-        # bbox_color = random.choice(colors)
+        bbox_color = random.choice(colors)
         # 同一类别固定颜色
-        bbox_color = colors[cl]
+        # bbox_color = colors[cl * 7]
 
 
         # 在这里上掩码颜色
@@ -132,7 +132,8 @@ if __name__ == '__main__':
     if not os.path.exists('images/res/'): os.mkdir('images/res/')
 
     # 定义颜色
-    hsv_tuples = [(1.0 * x / num_classes, 1., 1.) for x in range(num_classes)]
+    n_colors = num_classes * 7
+    hsv_tuples = [(1.0 * x / n_colors, 1., 1.) for x in range(n_colors)]
     colors = list(map(lambda x: colorsys.hsv_to_rgb(*x), hsv_tuples))
     colors = list(map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)), colors))
     random.seed(0)
@@ -170,7 +171,7 @@ if __name__ == '__main__':
             masks = masks.transpose(2, 0, 1)
             masks = (masks > 0.5).astype(np.float32)
             if draw_image:
-                image = draw(image, scores, classes, masks, all_classes)
+                image = draw(image, scores, classes, masks, all_classes, colors)
 
         # 估计剩余时间
         start_time = end_time
