@@ -88,7 +88,7 @@ def draw(image, scores, classes, masks, all_classes, colors, mask_alpha=0.45):
 
 # 6G的卡，训练时如果要预测，则设置use_gpu = False，否则显存不足。
 use_gpu = False
-# use_gpu = True
+use_gpu = True
 
 # 显存分配。
 if use_gpu:
@@ -105,12 +105,12 @@ if __name__ == '__main__':
 
     classes_path = 'data/coco_classes.txt'
     # model_path可以是'solo.h5'、'./weights/step00001000.h5'这些。
-    model_path = 'solo.h5'
-    # model_path = './weights/step00002000.h5'
+    # model_path = 'solo.h5'
+    model_path = './weights/step00002000.h5'
 
     # input_shape越大，精度会上升，但速度会下降。
-    # input_shape = (672, 672)
-    input_shape = (800, 800)
+    input_shape = (672, 672)
+    # input_shape = (800, 800)
 
     # 是否给图片画框。不画可以提速。读图片、后处理还可以继续优化。
     draw_image = True

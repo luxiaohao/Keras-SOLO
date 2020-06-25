@@ -15,9 +15,9 @@ class TestConfig(object):
         # self.score_thr = 0.1
         # self.mask_thr = 0.5
         self.nms_pre = 500
-        self.score_thr = 0.1
+        self.score_thr = 0.15
         self.mask_thr = 0.5
-        self.update_thr = 0.05   # 双分数阈值，这是第二个分数阈值，做第二次分数阈值过滤时使用。
+        self.update_thr = 0.1505   # 双分数阈值，这是第二个分数阈值，做第二次分数阈值过滤时使用。
         self.kernel = 'gaussian'
         self.sigma = 2.0
         self.max_per_img = 100
