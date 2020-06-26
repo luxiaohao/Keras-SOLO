@@ -43,7 +43,7 @@ class DecoupledSOLO_R50_FPN_Config(object):
         self.batch_size = 2
         # 如果self.pattern = 1，需要指定self.model_path表示从哪个模型读取权重继续训练。
         self.model_path = 'solo.h5'
-        # self.model_path = './weights/step00007000.h5'
+        self.model_path = './weights/step00007000.h5'
 
         # ========= 一些设置 =========
         # 每隔几步保存一次模型

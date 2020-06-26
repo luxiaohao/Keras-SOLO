@@ -18,7 +18,6 @@ import numpy as np
 import tensorflow as tf
 import keras
 import keras.layers as layers
-from scipy import ndimage
 
 from config import DecoupledSOLO_R50_FPN_Config
 from model.head import DecoupledSOLOHead
@@ -52,34 +51,40 @@ def process_image(img, input_shape):
     return pimage
 
 
-def draw(image, scores, classes, masks, all_classes, colors, mask_alpha=0.45):
+def draw(image, boxes, scores, classes, masks, all_classes, colors, mask_alpha=0.45):
     image_h, image_w, _ = image.shape
 
-    for score, cl, ms in zip(scores, classes, masks):
-        center_y, center_x = ndimage.measurements.center_of_mass(ms)  # 求物体掩码的质心。scipy提供技术支持。
-
-        cl = int(cl)
+    for box, score, cl, ms in zip(boxes, scores, classes, masks):
+        # 框坐标
+        x0, y0, x1, y1 = box
+        left = max(0, np.floor(x0 + 0.5).astype(int))
+        top = max(0, np.floor(y0 + 0.5).astype(int))
+        right = min(image.shape[1], np.floor(x1 + 0.5).astype(int))
+        bottom = min(image.shape[0], np.floor(y1 + 0.5).astype(int))
 
         # 随机颜色
         bbox_color = random.choice(colors)
         # 同一类别固定颜色
         # bbox_color = colors[cl * 7]
 
-
-        # 在这里上掩码颜色
+        # 在这里上掩码颜色。咩咩深度优化的画掩码代码。
         color = np.array(bbox_color)
         color = np.reshape(color, (1, 1, 3))
-        ms = np.expand_dims(ms, axis=2)
-        ms = np.tile(ms, (1, 1, 3))
-        color_ms = ms * color * mask_alpha
-        color_im = ms * image * (1 - mask_alpha)
-        image = color_im + color_ms + (1 - ms) * image
+        target_ms = ms[top:bottom, left:right]
+        target_ms = np.expand_dims(target_ms, axis=2)
+        target_ms = np.tile(target_ms, (1, 1, 3))
+        target_region = image[top:bottom, left:right, :]
+        target_region = target_ms * (target_region * (1 - mask_alpha) + color * mask_alpha) + (1 - target_ms) * target_region
+        image[top:bottom, left:right, :] = target_region
 
-        # 类别、得分
-        center_x = max(0, np.floor(center_x + 0.5).astype(int))
-        center_y = max(0, np.floor(center_y + 0.5).astype(int))
+
+        # 画框
+        bbox_thick = 1
+        cv2.rectangle(image, (left, top), (right, bottom), bbox_color, bbox_thick)
         bbox_mess = '%s: %.2f' % (all_classes[cl], score)
-        cv2.putText(image, bbox_mess, (center_x, center_y - 2), cv2.FONT_HERSHEY_SIMPLEX,
+        t_size = cv2.getTextSize(bbox_mess, 0, 0.5, thickness=1)[0]
+        cv2.rectangle(image, (left, top), (left + t_size[0], top - t_size[1] - 3), bbox_color, -1)
+        cv2.putText(image, bbox_mess, (left, top - 2), cv2.FONT_HERSHEY_SIMPLEX,
                     0.5, (0, 0, 0), 1, lineType=cv2.LINE_AA)
     return image
 
@@ -106,7 +111,7 @@ if __name__ == '__main__':
     classes_path = 'data/coco_classes.txt'
     # model_path可以是'solo.h5'、'./weights/step00001000.h5'这些。
     # model_path = 'solo.h5'
-    model_path = './weights/step00002000.h5'
+    model_path = './weights/step00009000.h5'
 
     # input_shape越大，精度会上升，但速度会下降。
     input_shape = (672, 672)
@@ -165,13 +170,29 @@ if __name__ == '__main__':
         h, w, _ = image.shape
         # 后处理那里，一定不会返回空。若没有物体，scores[0]会是负数，由此来判断有没有物体。
         if scores[0] > 0:
+            # 框坐标
+            boxes = []
+            _, mask_h, mask_w = masks.shape
+            for ms in masks:
+                sum_1 = np.sum(ms, axis=0)
+                x = np.where(sum_1 > 0.5)[0]
+                x0 = x[0]
+                x1 = x[-1]
+                sum_2 = np.sum(ms, axis=1)
+                y = np.where(sum_2 > 0.5)[0]
+                y0 = y[0]
+                y1 = y[-1]
+                boxes.append([x0, y0, x1, y1])
+            boxes = np.array(boxes).astype(np.float32)
+            boxes = boxes * [w/mask_w, h/mask_h, w/mask_w, h/mask_h]
+
             masks = masks.transpose(1, 2, 0)
             masks = cv2.resize(masks, (w, h), interpolation=cv2.INTER_LINEAR)
             masks = np.reshape(masks, (h, w, -1))
             masks = masks.transpose(2, 0, 1)
             masks = (masks > 0.5).astype(np.float32)
             if draw_image:
-                image = draw(image, scores, classes, masks, all_classes, colors)
+                image = draw(image, boxes, scores, classes, masks, all_classes, colors)
 
         # 估计剩余时间
         start_time = end_time
